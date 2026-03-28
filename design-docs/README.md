@@ -234,7 +234,8 @@ public class ActionEventListener implements ActionRegistryListener {
 design-docs/
 ├── README.md                               # 本文档
 ├── backend/                                # 后端设计文档
-│   ├── best-practice-design.md             # 最佳实践设计（V1+V2 融合版）⭐ 推荐
+│   ├── final-design.md                     # 最终设计（推荐）
+│   ├── best-practice-design.md             # 最佳实践设计（V1+V2 融合版）
 │   ├── v1-design.md                        # V1 详细设计（内嵌式）
 │   ├── v2-design.md                        # V2 详细设计（控制面/数据面分离）
 │   ├── codex-design.md                     # Codex 风格设计（企业级）
@@ -252,12 +253,14 @@ design-docs/
 ## 设计文档导航
 
 ### 后端设计
-| 文档 | 适用场景 | 说明 |
-|------|----------|------|
-| [最佳实践设计](backend/best-practice-design.md) | **推荐** | V1 + V2 融合版，渐进式架构，平滑演进 |
-| [V1 设计](backend/v1-design.md) | 小型项目/单体应用 | 内嵌式，快速启动 |
-| [V2 设计](backend/v2-design.md) | 微服务架构 | 控制面/数据面分离，完整治理 |
-| [Codex 设计](backend/codex-design.md) | 企业级平台 | 最完整的元数据定义和治理方案 |
+| 文档 | 说明 |
+|------|------|
+| [最终设计](backend/final-design.md) | **推荐** - 从零设计的最佳方案，控制面/数据面分离，前后端联动 |
+| [最佳实践设计](backend/best-practice-design.md) | V1 + V2 融合版（含兼容性设计） |
+| [V1 设计](backend/v1-design.md) | 内嵌式，快速启动 |
+| [V2 设计](backend/v2-design.md) | 控制面/数据面分离，完整治理 |
+| [Codex 设计](backend/codex-design.md) | 企业级平台设计 |
+| [V1 vs V2 对比](backend/v1-v2-comparison.md) | 两个版本对比 |
 
 ### 前端设计
 | 文档 | 内容 |

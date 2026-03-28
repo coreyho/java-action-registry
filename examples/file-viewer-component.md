@@ -69,7 +69,7 @@ public class FileResource {
      * @return 文件详细信息
      */
     @Action(
-        value = "get",
+        name = "get",
         title = "获取文件信息",
         description = "根据文件ID获取文件的元数据和访问信息",
         async = false,
@@ -113,7 +113,7 @@ public class FileResource {
      * @return 预览URL信息
      */
     @Action(
-        value = "preview-url",
+        name = "preview-url",
         title = "获取预览URL",
         description = "生成带安全水印的预览URL",
         async = false,
@@ -166,7 +166,7 @@ public class FileResource {
      * @param response HTTP响应
      */
     @Action(
-        value = "download",
+        name = "download",
         title = "下载文件",
         description = "下载原始文件",
         async = true,
@@ -218,7 +218,7 @@ public class FileResource {
      * @return 文件内容
      */
     @Action(
-        value = "content",
+        name = "content",
         title = "获取文件内容",
         description = "获取文件的可预览内容，支持分页",
         async = false,
@@ -260,7 +260,7 @@ public class FileResource {
      * @return 缩略图信息
      */
     @Action(
-        value = "thumbnail",
+        name = "thumbnail",
         title = "获取缩略图",
         description = "生成文件缩略图",
         async = false,
@@ -286,7 +286,7 @@ public class FileResource {
      * 搜索文件
      */
     @Action(
-        value = "search",
+        name = "search",
         title = "搜索文件",
         description = "按名称、类型等条件搜索文件"
     )
@@ -310,7 +310,7 @@ public class FileResource {
      * 批量获取文件信息
      */
     @Action(
-        value = "batch-get",
+        name = "batch-get",
         title = "批量获取文件信息",
         description = "批量查询多个文件的信息"
     )

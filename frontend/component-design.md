@@ -61,6 +61,7 @@
 interface ComponentDefinition {
   // 基础信息
   id: string;                    // 唯一标识
+  namespace: string;             // 命名空间
   name: string;                  // 组件名称
   version: string;               // 版本号 (SemVer)
   title: string;                 // 显示标题
@@ -107,11 +108,24 @@ type ComponentAction = {
   description?: string;          // 描述
   actionKey: string;             // 后端 Action 标识
   trigger: 'auto' | 'manual' | 'event';  // 触发方式
-  inputMapping?: Record<string, string>; // 输入参数映射
-  outputMapping?: Record<string, string>;// 输出结果映射
+  // 参数映射（使用完整的映射类型）
+  inputMapping?: Record<string, ParamMapping>;
+  outputMapping?: Record<string, ResultMapping>;
   loadingTarget?: string;        // loading 状态绑定到哪个属性
   errorTarget?: string;          // error 状态绑定到哪个属性
 };
+
+// 参数映射类型
+type ParamMapping =
+  | { type: 'static'; value: any }
+  | { type: 'prop'; propName: string }
+  | { type: 'context'; path: string }
+  | { type: 'expression'; expr: string };
+
+// 结果映射类型
+type ResultMapping =
+  | { type: 'direct'; resultPath: string }
+  | { type: 'transform'; expr: string };
 ```
 
 ### 2.2 属性配置 Schema
@@ -356,7 +370,8 @@ const fileViewerEvents: EventSchema[] = [
 │                              ▼                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │  HTTP Request                                           │   │
-│  │  POST /api/action-invoke/storage.file.get:1.0.0         │   │
+│  │  POST /api/invoke/storage.file.get                        │   │
+│  │  X-Action-Version: 1.0.0                                  │   │
 │  │  {                                                      │   │
 │  │    "input": { "fileId": "file_123" }                    │   │
 │  │  }                                                      │   │
@@ -430,7 +445,7 @@ interface ActionBinding {
 
   // 错误处理
   errorHandling?: {
-    strategy: 'throw' | 'silent' | 'fallback';
+    strategy: 'throw' | 'silent' | 'fallback' | 'notify';
     fallbackValue?: any;
     notifyUser?: boolean;
   };
@@ -463,7 +478,7 @@ const fileViewerActionBindings: ActionBinding[] = [
       fileName: { type: 'context', path: 'fileInfo.name' }
     },
     errorHandling: {
-      strategy: 'notify',
+      strategy: 'silent',
       notifyUser: true
     }
   },
@@ -962,7 +977,7 @@ interface ActionInvocation {
 }
 
 // 与后端 Invoke API 保持一致
-// POST /api/action-invoke/{actionFullName}
+// POST /api/invoke/{namespace}.{action}
 ```
 
 ---

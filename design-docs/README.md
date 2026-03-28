@@ -232,15 +232,20 @@ public class ActionEventListener implements ActionRegistryListener {
 
 ```
 design-docs/
-├── java-action-registry-design.md          # V1 详细设计文档（内嵌式）
-├── java-action-registry-design-v2.md       # V2 详细设计文档（控制面/数据面分离）
-├── java-action-registry-design-codex.md    # Codex 风格设计文档
-├── frontend-component-design.md            # 前端组件设计文档 ⭐ 新增
-├── file-viewer-component-example.md        # 文件阅览组件完整示例 ⭐ 新增
-├── v1-v2-comparison.md                     # V1 vs V2 对比
-├── core-implementation.java                # 核心类实现
-├── spring-boot-starter.java                # Spring Boot Starter
-└── README.md                               # 本文件
+├── README.md                               # 本文档
+├── backend/                                # 后端设计文档
+│   ├── v1-design.md                        # V1 详细设计（内嵌式）
+│   ├── v2-design.md                        # V2 详细设计（控制面/数据面分离）
+│   ├── codex-design.md                     # Codex 风格设计（企业级）
+│   └── v1-v2-comparison.md                 # V1 vs V2 对比
+├── frontend/                               # 前端设计文档
+│   └── component-design.md                 # 前端组件架构设计
+├── examples/                               # 组件示例
+│   └── file-viewer-component.md            # 文件阅览组件完整示例
+└── implementation/                         # 实现代码草稿
+    ├── core-implementation.java            # 核心类实现
+    ├── control-plane-implementation.java   # 控制面实现
+    └── spring-boot-starter.java            # Spring Boot Starter
 ```
 
 ## 设计文档导航
@@ -248,20 +253,24 @@ design-docs/
 ### 后端设计
 | 文档 | 适用场景 | 说明 |
 |------|----------|------|
-| [V1 设计](java-action-registry-design.md) | 小型项目/单体应用 | 内嵌式，快速启动 |
-| [V2 设计](java-action-registry-design-v2.md) | 微服务架构 | 控制面/数据面分离，完整治理 |
-| [Codex 设计](java-action-registry-design-codex.md) | 企业级平台 | 最完整的元数据定义和治理方案 |
+| [V1 设计](backend/v1-design.md) | 小型项目/单体应用 | 内嵌式，快速启动 |
+| [V2 设计](backend/v2-design.md) | 微服务架构 | 控制面/数据面分离，完整治理 |
+| [Codex 设计](backend/codex-design.md) | 企业级平台 | 最完整的元数据定义和治理方案 |
 
-### 前端设计 ⭐ 新增
+### 前端设计
 | 文档 | 内容 |
 |------|------|
-| [前端组件设计](frontend-component-design.md) | 组件架构、前后端联动、组件市场、设计时与运行时分离 |
-| [文件阅览组件示例](file-viewer-component-example.md) | 完整的文件阅览组件实现（前端+后端+集成） |
+| [前端组件设计](frontend/component-design.md) | 组件架构、前后端联动、组件市场、设计时与运行时分离 |
+
+### 组件示例
+| 文档 | 内容 |
+|------|------|
+| [文件阅览组件](examples/file-viewer-component.md) | 完整的文件阅览组件实现（前端+后端+集成） |
 
 ### 架构对比
 | 文档 | 内容 |
 |------|------|
-| [V1 vs V2 对比](v1-v2-comparison.md) | 两个版本的功能、接口、实现对比 |
+| [V1 vs V2 对比](backend/v1-v2-comparison.md) | 两个版本的功能、接口、实现对比 |
 
 ## 技术栈
 

@@ -234,6 +234,7 @@ public class ActionEventListener implements ActionRegistryListener {
 design-docs/
 ├── README.md                               # 本文档
 ├── backend/                                # 后端设计文档
+│   ├── best-practice-design.md             # 最佳实践设计（V1+V2 融合版）⭐ 推荐
 │   ├── v1-design.md                        # V1 详细设计（内嵌式）
 │   ├── v2-design.md                        # V2 详细设计（控制面/数据面分离）
 │   ├── codex-design.md                     # Codex 风格设计（企业级）
@@ -253,6 +254,7 @@ design-docs/
 ### 后端设计
 | 文档 | 适用场景 | 说明 |
 |------|----------|------|
+| [最佳实践设计](backend/best-practice-design.md) | **推荐** | V1 + V2 融合版，渐进式架构，平滑演进 |
 | [V1 设计](backend/v1-design.md) | 小型项目/单体应用 | 内嵌式，快速启动 |
 | [V2 设计](backend/v2-design.md) | 微服务架构 | 控制面/数据面分离，完整治理 |
 | [Codex 设计](backend/codex-design.md) | 企业级平台 | 最完整的元数据定义和治理方案 |

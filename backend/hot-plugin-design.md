@@ -1,52 +1,69 @@
-# Java Jar 包热注册机制设计
+# Java Jar 包热注册机制设计 (基于 PF4J + Spring)
 
 ## 1. 概述
 
 ### 1.1 设计目标
 
-支持在运行时动态加载、卸载和更新外部 Jar 包中的 Action 组件，无需重启服务。
+基于 [PF4J](https://github.com/pf4j/pf4j) 和 [pf4j-spring](https://github.com/clyoudu/pf4j-spring) 实现 Java Jar 包热注册能力，支持在运行时动态加载、卸载和更新 Action 插件，无需重启服务。
 
-### 1.2 核心特性
+### 1.2 技术选型
+
+| 组件 | 选型 | 说明 |
+|------|------|------|
+| 插件框架 | PF4J 3.12+ | 成熟的 Java 插件框架 |
+| Spring 集成 | pf4j-spring | PF4J 的 Spring 集成方案 |
+| 类加载 | SpringPluginClassLoader | 支持 Spring Bean 的类加载器 |
+| 生命周期 | DefaultPluginManager | PF4J 内置生命周期管理 |
+
+### 1.3 核心特性
 
 - **热加载**：运行时动态加载 Jar 包
-- **类隔离**：每个 Jar 包独立的 ClassLoader，避免依赖冲突
-- **版本管理**：支持多版本共存和灰度切换
-- **安全沙箱**：限制插件的权限和资源使用
-- **无损卸载**：支持安全卸载已加载的插件
+- **Spring 集成**：插件内支持 Spring 注解和依赖注入
+- **类隔离**：每个插件独立的 ClassLoader
+- **版本管理**：支持多版本插件共存
+- **无损卸载**：安全卸载已加载的插件
 
-### 1.3 架构图
+### 1.4 架构图
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                          Action Registry Service                            │
+│                        Action Registry Service                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                      Plugin Manager (插件管理器)                      │   │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐     │   │
-│  │  │  上传存储   │  │  加载器池   │  │  生命周期   │  │  安全沙箱   │     │   │
-│  │  │  Storage   │  │  LoaderPool│  │  Lifecycle │  │  Sandbox   │     │   │
-│  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘     │   │
+│  │                    Spring Plugin Manager (PF4J)                     │   │
+│  │                                                                     │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐    │   │
+│  │  │   Load     │  │   Start    │  │   Stop     │  │  Unload    │    │   │
+│  │  │  Plugins   │  │  Plugins   │  │  Plugins   │  │  Plugins   │    │   │
+│  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘    │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                   Plugin Registry (插件注册表)                        │   │
+│  │                    Plugin Directory (插件目录)                       │   │
 │  │                                                                     │   │
-│  │   Plugin-1 (v1.0.0)          Plugin-2 (v2.1.0)                      │   │
+│  │   file-storage-plugin-1.0.0.jar                                    │   │
+│  │   user-management-plugin-2.1.0.jar                                 │   │
+│  │   order-service-plugin-1.5.0.jar                                   │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │              Spring ApplicationContext (插件上下文)                   │   │
+│  │                                                                     │   │
 │  │   ┌─────────────────┐        ┌─────────────────┐                   │   │
-│  │   │ PluginClassLoader│       │ PluginClassLoader│                   │   │
+│  │   │ Plugin-1 Context│        │ Plugin-2 Context│                   │   │
 │  │   │  ┌───────────┐  │        │  ┌───────────┐  │                   │   │
-│  │   │  │  Jar File │  │        │  │  Jar File │  │                   │   │
-│  │   │  │  ├─Action1│  │        │  │  ├─Action3│  │                   │   │
-│  │   │  │  ├─Action2│  │        │  │  ├─Action4│  │                   │   │
-│  │   │  │  └─Service│  │        │  │  └─Service│  │                   │   │
+│  │   │  │ @Service  │  │        │  │ @Service  │  │                   │   │
+│  │   │  │ @Component│  │        │  │ @Component│  │                   │   │
+│  │   │  │ @Autowired│  │        │  │ @Autowired│  │                   │   │
 │  │   │  └───────────┘  │        │  └───────────┘  │                   │   │
 │  │   └─────────────────┘        └─────────────────┘                   │   │
 │  │                                                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Global Registry (全局注册表)                       │   │
+│  │                    Global Action Registry                           │   │
 │  │                                                                     │   │
 │  │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐           │   │
 │  │   │ 内置Action│  │Plugin-1  │  │Plugin-2  │  │ 远程Action│           │   │
@@ -63,113 +80,387 @@
 
 ## 2. 核心概念
 
-| 概念 | 说明 | 示例 |
-|------|------|------|
-| **Plugin** | 热加载的 Jar 包插件 | file-storage-plugin.jar |
-| **PluginClassLoader** | 插件隔离的类加载器 | 父类加载器为 AppClassLoader |
-| **PluginContext** | 插件运行时上下文 | 包含配置、状态、元数据 |
-| **PluginState** | 插件生命周期状态 | INSTALLED → RESOLVED → ACTIVE → STOPPED |
+| 概念 | 说明 | 对应 PF4J 组件 |
+|------|------|----------------|
+| **Plugin** | 热加载的 Jar 包插件 | `Plugin` 接口 |
+| **Extension** | 插件暴露的扩展点 | `@Extension` 注解 |
+| **ExtensionPoint** | 扩展点接口定义 | `ExtensionPoint` 接口 |
+| **PluginManager** | 插件生命周期管理 | `SpringPluginManager` |
+| **PluginState** | 插件状态 | `PluginState` 枚举 |
+
+### 2.1 PF4J 生命周期状态
+
+```
+CREATED → RESOLVED → STARTED → STOPPED → UNLOADED
+   ↑          ↑          ↑          ↑
+   └──────────┴──────────┴──────────┘
+           (可逆向转换)
+```
+
+| 状态 | 说明 |
+|------|------|
+| CREATED | 插件已创建，但未解析依赖 |
+| RESOLVED | 依赖已解析，可以启动 |
+| STARTED | 插件已启动，正在运行 |
+| STOPPED | 插件已停止 |
+| UNLOADED | 插件已卸载 |
+| FAILED | 插件启动/运行失败 |
 
 ---
 
-## 3. 数据模型
+## 3. 项目结构
 
-### 3.1 插件定义表
-
-```sql
-CREATE TABLE plugin_definition (
-    id                  VARCHAR(64) PRIMARY KEY,
-    plugin_key          VARCHAR(128) NOT NULL,      -- 插件标识: vendor.plugin-name
-    version             VARCHAR(32) NOT NULL,
-    name                VARCHAR(100) NOT NULL,
-    description         TEXT,
-    vendor              VARCHAR(100),
-
-    -- 文件信息
-    jar_file_name       VARCHAR(255) NOT NULL,
-    jar_file_path       VARCHAR(500) NOT NULL,
-    jar_file_size       BIGINT,
-    jar_checksum        VARCHAR(64),                -- SHA-256
-
-    -- 依赖信息
-    dependencies        JSON,                       -- [{"pluginKey": "", "versionRange": ""}]
-
-    -- 配置
-    config_schema       JSON,                       -- 配置项 Schema
-    default_config      JSON,
-
-    -- 状态
-    state               VARCHAR(20) NOT NULL DEFAULT 'INSTALLED',
-    -- INSTALLED: 已上传
-    -- RESOLVED: 依赖已解析
-    -- STARTING: 启动中
-    -- ACTIVE: 运行中
-    -- STOPPING: 停止中
-    -- STOPPED: 已停止
-    -- UNINSTALLED: 已卸载
-    -- FAILED: 失败
-
-    -- 运行时信息
-    loaded_at           DATETIME,
-    activated_at        DATETIME,
-    last_error          TEXT,
-
-    -- 权限配置
-    permissions         JSON,                       -- 沙箱权限
-
-    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-
-    UNIQUE KEY uk_plugin_key_version (plugin_key, version),
-    INDEX idx_state (state)
-);
-
--- 插件 Action 映射表
-CREATE TABLE plugin_action (
-    id                  VARCHAR(64) PRIMARY KEY,
-    plugin_id           VARCHAR(64) NOT NULL,
-    action_key          VARCHAR(255) NOT NULL,      -- namespace.action:version
-    action_name         VARCHAR(64) NOT NULL,
-    resource_name       VARCHAR(64) NOT NULL,
-
-    -- Action 元数据
-    metadata            JSON,
-
-    -- 状态
-    enabled             BOOLEAN DEFAULT TRUE,
-
-    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
-
-    FOREIGN KEY (plugin_id) REFERENCES plugin_definition(id),
-    UNIQUE KEY uk_plugin_action (plugin_id, action_key),
-    INDEX idx_action_key (action_key)
-);
+```
+project/
+├── action-api/                          # 插件 API 模块 (共享)
+│   ├── src/main/java/com/example/action/
+│   │   ├── ActionPlugin.java            # 插件扩展点接口
+│   │   ├── ActionDefinition.java        # Action 定义
+│   │   └── ActionExecutor.java          # Action 执行接口
+│   └── pom.xml
+│
+├── action-server/                       # 主应用
+│   ├── src/main/java/com/example/server/
+│   │   ├── ActionServerApplication.java
+│   │   ├── config/
+│   │   │   └── PluginConfig.java        # PF4J Spring 配置
+│   │   ├── controller/
+│   │   │   └── PluginController.java    # 插件管理 API
+│   │   └── service/
+│   │       └── ActionDispatchService.java # Action 分发
+│   └── pom.xml
+│
+├── plugins/                             # 插件示例
+│   ├── file-storage-plugin/
+│   │   ├── src/main/java/
+│   │   │   └── FileStoragePlugin.java   # 插件实现
+│   │   └── pom.xml
+│   └── user-plugin/
+│       └── ...
+│
+└── pom.xml
 ```
 
 ---
 
-## 4. API 设计
+## 4. 核心实现
 
-### 4.1 插件管理 API
+### 4.1 插件 API 定义 (action-api)
 
 ```java
+package com.example.action;
+
+import org.pf4j.ExtensionPoint;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Action 插件扩展点
+ * 所有 Action 插件必须实现此接口
+ */
+public interface ActionPlugin extends ExtensionPoint {
+
+    /**
+     * 获取插件命名空间
+     */
+    String getNamespace();
+
+    /**
+     * 获取插件版本
+     */
+    String getVersion();
+
+    /**
+     * 获取插件提供的 Actions
+     */
+    List<ActionDefinition> getActions();
+
+    /**
+     * 执行 Action
+     */
+    Object execute(String actionName, Map<String, Object> params);
+}
+```
+
+```java
+package com.example.action;
+
+import lombok.Data;
+import java.util.Map;
+
+/**
+ * Action 定义
+ */
+@Data
+public class ActionDefinition {
+    private String name;
+    private String title;
+    private String description;
+    private Map<String, Object> inputSchema;
+    private Map<String, Object> outputSchema;
+
+    public ActionDefinition(String name, String title) {
+        this.name = name;
+        this.title = title;
+    }
+}
+```
+
+### 4.2 主应用配置 (action-server)
+
+#### Maven 依赖
+
+```xml
+<dependencies>
+    <!-- 插件 API -->
+    <dependency>
+        <groupId>com.example</groupId>
+        <artifactId>action-api</artifactId>
+        <version>${project.version}</version>
+    </dependency>
+
+    <!-- PF4J Spring -->
+    <dependency>
+        <groupId>org.pf4j</groupId>
+        <artifactId>pf4j-spring</artifactId>
+        <version>0.9.0</version>
+    </dependency>
+
+    <!-- Spring Boot -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+</dependencies>
+```
+
+#### PF4J Spring 配置
+
+```java
+package com.example.server.config;
+
+import org.pf4j.spring.SpringPluginManager;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import java.nio.file.Paths;
+
+/**
+ * PF4J Spring 配置
+ */
+@Configuration
+public class PluginConfig {
+
+    /**
+     * 配置 SpringPluginManager
+     */
+    @Bean
+    public SpringPluginManager pluginManager() {
+        // 插件存放目录
+        return new SpringPluginManager(
+            Paths.get("./plugins")
+        );
+    }
+
+    /**
+     * 启动时加载所有插件
+     */
+    @Bean
+    public PluginLoader pluginLoader(SpringPluginManager pluginManager) {
+        return new PluginLoader(pluginManager);
+    }
+}
+```
+
+```java
+package com.example.server.config;
+
+import org.pf4j.spring.SpringPluginManager;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.stereotype.Component;
+
+/**
+ * 插件加载器
+ */
+@Component
+public class PluginLoader implements CommandLineRunner {
+
+    private final SpringPluginManager pluginManager;
+
+    public PluginLoader(SpringPluginManager pluginManager) {
+        this.pluginManager = pluginManager;
+    }
+
+    @Override
+    public void run(String... args) {
+        // 加载所有插件
+        pluginManager.loadPlugins();
+
+        // 启动所有插件
+        pluginManager.startPlugins();
+
+        System.out.println("Loaded " + pluginManager.getPlugins().size() + " plugins");
+    }
+}
+```
+
+### 4.3 Action 分发服务
+
+```java
+package com.example.server.service;
+
+import com.example.action.ActionDefinition;
+import com.example.action.ActionPlugin;
+import org.pf4j.spring.SpringPluginManager;
+import org.springframework.stereotype.Service;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * Action 分发服务
+ */
+@Service
+public class ActionDispatchService {
+
+    private final SpringPluginManager pluginManager;
+
+    public ActionDispatchService(SpringPluginManager pluginManager) {
+        this.pluginManager = pluginManager;
+    }
+
+    /**
+     * 获取所有可用的 Actions
+     */
+    public Map<String, List<ActionDefinition>> getAllActions() {
+        Map<String, List<ActionDefinition>> result = new HashMap<>();
+
+        List<ActionPlugin> plugins = pluginManager.getExtensions(ActionPlugin.class);
+        for (ActionPlugin plugin : plugins) {
+            result.put(plugin.getNamespace(), plugin.getActions());
+        }
+
+        return result;
+    }
+
+    /**
+     * 执行 Action
+     */
+    public Object execute(String namespace, String actionName, Map<String, Object> params) {
+        // 查找对应插件
+        ActionPlugin plugin = findPlugin(namespace);
+        if (plugin == null) {
+            throw new RuntimeException("Plugin not found: " + namespace);
+        }
+
+        // 验证 Action 是否存在
+        boolean actionExists = plugin.getActions().stream()
+            .anyMatch(a -> a.getName().equals(actionName));
+        if (!actionExists) {
+            throw new RuntimeException("Action not found: " + actionName);
+        }
+
+        // 执行 Action
+        return plugin.execute(actionName, params);
+    }
+
+    /**
+     * 查找插件
+     */
+    private ActionPlugin findPlugin(String namespace) {
+        List<ActionPlugin> plugins = pluginManager.getExtensions(ActionPlugin.class);
+        return plugins.stream()
+            .filter(p -> p.getNamespace().equals(namespace))
+            .findFirst()
+            .orElse(null);
+    }
+}
+```
+
+### 4.4 插件管理 API
+
+```java
+package com.example.server.controller;
+
+import org.pf4j.PluginState;
+import org.pf4j.PluginWrapper;
+import org.pf4j.spring.SpringPluginManager;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+/**
+ * 插件管理 API
+ */
 @RestController
 @RequestMapping("/api/plugins")
 public class PluginController {
 
-    @Autowired
-    private PluginManager pluginManager;
+    private final SpringPluginManager pluginManager;
+    private final Path pluginPath = Paths.get("./plugins");
+
+    public PluginController(SpringPluginManager pluginManager) {
+        this.pluginManager = pluginManager;
+    }
 
     /**
-     * 上传插件
+     * 获取所有插件
+     */
+    @GetMapping
+    public List<PluginInfo> listPlugins() {
+        return pluginManager.getPlugins().stream()
+            .map(this::toPluginInfo)
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * 获取插件详情
+     */
+    @GetMapping("/{pluginId}")
+    public PluginInfo getPlugin(@PathVariable String pluginId) {
+        PluginWrapper plugin = pluginManager.getPlugin(pluginId);
+        if (plugin == null) {
+            throw new RuntimeException("Plugin not found: " + pluginId);
+        }
+        return toPluginInfo(plugin);
+    }
+
+    /**
+     * 上传并加载插件
      */
     @PostMapping
-    public ResponseEntity<PluginDefinition> uploadPlugin(
+    public ResponseEntity<PluginInfo> uploadPlugin(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "force", defaultValue = "false") boolean force) {
+            @RequestParam(value = "autoStart", defaultValue = "true") boolean autoStart) throws IOException {
 
-        PluginDefinition plugin = pluginManager.install(file, force);
-        return ResponseEntity.status(HttpStatus.CREATED).body(plugin);
+        // 确保目录存在
+        if (!Files.exists(pluginPath)) {
+            Files.createDirectories(pluginPath);
+        }
+
+        // 保存文件
+        String fileName = UUID.randomUUID() + ".jar";
+        Path targetPath = pluginPath.resolve(fileName);
+        file.transferTo(targetPath);
+
+        // 加载插件
+        String pluginId = pluginManager.loadPlugin(targetPath);
+
+        // 自动启动
+        if (autoStart) {
+            pluginManager.startPlugin(pluginId);
+        }
+
+        return ResponseEntity.ok(toPluginInfo(pluginManager.getPlugin(pluginId)));
     }
 
     /**
@@ -177,7 +468,10 @@ public class PluginController {
      */
     @PostMapping("/{pluginId}/start")
     public ResponseEntity<Void> startPlugin(@PathVariable String pluginId) {
-        pluginManager.start(pluginId);
+        PluginState state = pluginManager.startPlugin(pluginId);
+        if (state != PluginState.STARTED) {
+            throw new RuntimeException("Failed to start plugin: " + pluginId);
+        }
         return ResponseEntity.ok().build();
     }
 
@@ -186,7 +480,10 @@ public class PluginController {
      */
     @PostMapping("/{pluginId}/stop")
     public ResponseEntity<Void> stopPlugin(@PathVariable String pluginId) {
-        pluginManager.stop(pluginId);
+        PluginState state = pluginManager.stopPlugin(pluginId);
+        if (state != PluginState.STOPPED) {
+            throw new RuntimeException("Failed to stop plugin: " + pluginId);
+        }
         return ResponseEntity.ok().build();
     }
 
@@ -194,1276 +491,309 @@ public class PluginController {
      * 卸载插件
      */
     @DeleteMapping("/{pluginId}")
-    public ResponseEntity<Void> uninstallPlugin(@PathVariable String pluginId) {
-        pluginManager.uninstall(pluginId);
+    public ResponseEntity<Void> unloadPlugin(@PathVariable String pluginId) {
+        // 先停止
+        pluginManager.stopPlugin(pluginId);
+
+        // 卸载
+        boolean unloaded = pluginManager.unloadPlugin(pluginId);
+        if (!unloaded) {
+            throw new RuntimeException("Failed to unload plugin: " + pluginId);
+        }
+
         return ResponseEntity.noContent().build();
     }
 
     /**
-     * 查询插件列表
+     * 重启插件
      */
-    @GetMapping
-    public ResponseEntity<Page<PluginDefinition>> listPlugins(
-            @RequestParam(required = false) String state,
-            @RequestParam(required = false) String keyword) {
-
-        return ResponseEntity.ok(pluginManager.list(state, keyword));
-    }
-
-    /**
-     * 获取插件详情
-     */
-    @GetMapping("/{pluginId}")
-    public ResponseEntity<PluginDetail> getPlugin(@PathVariable String pluginId) {
-        return ResponseEntity.ok(pluginManager.getDetail(pluginId));
-    }
-
-    /**
-     * 更新插件配置
-     */
-    @PutMapping("/{pluginId}/config")
-    public ResponseEntity<Void> updateConfig(
-            @PathVariable String pluginId,
-            @RequestBody Map<String, Object> config) {
-
-        pluginManager.updateConfig(pluginId, config);
+    @PostMapping("/{pluginId}/restart")
+    public ResponseEntity<Void> restartPlugin(@PathVariable String pluginId) {
+        pluginManager.stopPlugin(pluginId);
+        PluginState state = pluginManager.startPlugin(pluginId);
+        if (state != PluginState.STARTED) {
+            throw new RuntimeException("Failed to restart plugin: " + pluginId);
+        }
         return ResponseEntity.ok().build();
     }
 
-    /**
-     * 获取插件日志
-     */
-    @GetMapping("/{pluginId}/logs")
-    public ResponseEntity<List<PluginLog>> getPluginLogs(
-            @PathVariable String pluginId,
-            @RequestParam(defaultValue = "100") int limit) {
+    private PluginInfo toPluginInfo(PluginWrapper plugin) {
+        return new PluginInfo(
+            plugin.getPluginId(),
+            plugin.getDescriptor().getPluginId(),
+            plugin.getDescriptor().getVersion(),
+            plugin.getPluginState().toString()
+        );
+    }
 
-        return ResponseEntity.ok(pluginManager.getLogs(pluginId, limit));
+    // DTO
+    public record PluginInfo(String id, String name, String version, String state) {}
+}
+```
+
+---
+
+## 5. 插件开发
+
+### 5.1 插件 Maven 配置
+
+```xml
+<project>
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example.plugins</groupId>
+    <artifactId>file-storage-plugin</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <dependencies>
+        <!-- 插件 API (provided - 由主应用提供) -->
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>action-api</artifactId>
+            <version>1.0.0</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- PF4J (provided) -->
+        <dependency>
+            <groupId>org.pf4j</groupId>
+            <artifactId>pf4j</artifactId>
+            <version>3.12.0</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Spring (provided) -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>6.0.0</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <!-- PF4J 插件标识 -->
+                            <Plugin-Id>file-storage-plugin</Plugin-Id>
+                            <Plugin-Version>1.0.0</Plugin-Version>
+                            <Plugin-Class>com.example.plugin.FileStoragePlugin</Plugin-Class>
+                            <Plugin-Provider>Example Corp</Plugin-Provider>
+                            <Plugin-Dependencies/>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+### 5.2 插件实现示例
+
+```java
+package com.example.plugin;
+
+import com.example.action.ActionDefinition;
+import com.example.action.ActionPlugin;
+import org.pf4j.Extension;
+import org.springframework.stereotype.Component;
+
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 文件存储插件
+ */
+@Extension
+@Component
+public class FileStoragePlugin implements ActionPlugin {
+
+    @Override
+    public String getNamespace() {
+        return "storage.file";
+    }
+
+    @Override
+    public String getVersion() {
+        return "1.0.0";
+    }
+
+    @Override
+    public List<ActionDefinition> getActions() {
+        return Arrays.asList(
+            new ActionDefinition("upload", "上传文件"),
+            new ActionDefinition("download", "下载文件"),
+            new ActionDefinition("delete", "删除文件")
+        );
+    }
+
+    @Override
+    public Object execute(String actionName, Map<String, Object> params) {
+        return switch (actionName) {
+            case "upload" -> upload(params);
+            case "download" -> download(params);
+            case "delete" -> delete(params);
+            default -> throw new RuntimeException("Unknown action: " + actionName);
+        };
+    }
+
+    private Object upload(Map<String, Object> params) {
+        String fileName = (String) params.get("fileName");
+        // 实现上传逻辑
+        Map<String, Object> result = new HashMap<>();
+        result.put("fileId", UUID.randomUUID().toString());
+        result.put("url", "/files/" + fileName);
+        return result;
+    }
+
+    private Object download(Map<String, Object> params) {
+        String fileId = (String) params.get("fileId");
+        // 实现下载逻辑
+        return Map.of("content", "file content");
+    }
+
+    private Object delete(Map<String, Object> params) {
+        String fileId = (String) params.get("fileId");
+        // 实现删除逻辑
+        return Map.of("success", true);
     }
 }
 ```
 
 ---
 
-## 5. 核心实现
-
-### 5.1 插件类加载器
-
-```java
-/**
- * 插件隔离的类加载器
- *
- * 加载策略:
- * 1. 先委托父加载器加载核心类 (java.*, javax.*, org.springframework.*)
- * 2. 再从插件 Jar 中加载类
- * 3. 支持共享类机制 (Shared Classes)
- */
-public class PluginClassLoader extends URLClassLoader {
-
-    private final String pluginId;
-    private final Set<String> sharedPackages;
-    private final Set<String> restrictedPackages;
-
-    // 父加载器 (通常是 AppClassLoader)
-    private final ClassLoader parentLoader;
-
-    public PluginClassLoader(String pluginId,
-                             Path jarPath,
-                             Set<String> sharedPackages,
-                             Set<String> restrictedPackages) throws IOException {
-        super(new URL[] { jarPath.toUri().toURL() }, null);
-        this.pluginId = pluginId;
-        this.sharedPackages = sharedPackages != null ? sharedPackages : Collections.emptySet();
-        this.restrictedPackages = restrictedPackages != null ? restrictedPackages : Collections.emptySet();
-        this.parentLoader = getSystemClassLoader();
-    }
-
-    @Override
-    protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-        // 1. 检查是否是被限制的类
-        if (isRestricted(name)) {
-            throw new ClassNotFoundException("Access to class " + name + " is restricted in plugin " + pluginId);
-        }
-
-        // 2. 检查是否已加载
-        Class<?> clazz = findLoadedClass(name);
-        if (clazz != null) {
-            return resolveClass(clazz, resolve);
-        }
-
-        // 3. 核心类委托给父加载器
-        if (isCoreClass(name)) {
-            try {
-                clazz = parentLoader.loadClass(name);
-                return resolveClass(clazz, resolve);
-            } catch (ClassNotFoundException e) {
-                // 父加载器找不到，继续尝试自己加载
-            }
-        }
-
-        // 4. 共享包委托给父加载器
-        if (isSharedPackage(name)) {
-            try {
-                clazz = parentLoader.loadClass(name);
-                return resolveClass(clazz, resolve);
-            } catch (ClassNotFoundException e) {
-                // 父加载器找不到，尝试自己加载
-            }
-        }
-
-        // 5. 从插件 Jar 中加载
-        try {
-            clazz = findClass(name);
-            return resolveClass(clazz, resolve);
-        } catch (ClassNotFoundException e) {
-            // 最后委托给父加载器
-            clazz = parentLoader.loadClass(name);
-            return resolveClass(clazz, resolve);
-        }
-    }
-
-    private boolean isCoreClass(String name) {
-        return name.startsWith("java.") ||
-               name.startsWith("javax.") ||
-               name.startsWith("sun.") ||
-               name.startsWith("com.sun.") ||
-               name.startsWith("jdk.");
-    }
-
-    private boolean isSharedPackage(String name) {
-        return sharedPackages.stream().anyMatch(name::startsWith);
-    }
-
-    private boolean isRestricted(String name) {
-        return restrictedPackages.stream().anyMatch(name::startsWith);
-    }
-
-    private Class<?> resolveClass(Class<?> clazz, boolean resolve) {
-        if (resolve) {
-            resolveClass(clazz);
-        }
-        return clazz;
-    }
-
-    /**
-     * 获取插件加载的类数量 (用于监控)
-     */
-    public int getLoadedClassCount() {
-        // 通过反射获取已加载的类数量
-        return -1; // 需要具体实现
-    }
-
-    @Override
-    public void close() throws IOException {
-        super.close();
-    }
-}
-```
-
-### 5.2 插件管理器
-
-```java
-/**
- * 插件生命周期管理器
- */
-@Service
-public class DefaultPluginManager implements PluginManager {
-
-    private static final Logger logger = LoggerFactory.getLogger(DefaultPluginManager.class);
-
-    @Autowired
-    private PluginRepository pluginRepository;
-
-    @Autowired
-    private GlobalActionRegistry actionRegistry;
-
-    @Autowired
-    private PluginScanner pluginScanner;
-
-    @Autowired
-    private PluginStorage pluginStorage;
-
-    @Autowired
-    private ApplicationEventPublisher eventPublisher;
-
-    @Value("${plugin.storage.path:./plugins}")
-    private String pluginStoragePath;
-
-    // 插件加载器缓存: pluginId -> PluginClassLoader
-    private final ConcurrentHashMap<String, PluginClassLoader> loaderCache = new ConcurrentHashMap<>();
-
-    // 插件实例缓存: pluginId -> PluginContext
-    private final ConcurrentHashMap<String, PluginContext> pluginCache = new ConcurrentHashMap<>();
-
-    @Override
-    @Transactional
-    public PluginDefinition install(MultipartFile file, boolean force) {
-        try {
-            // 1. 保存文件到临时目录
-            Path tempPath = pluginStorage.saveTemp(file);
-
-            // 2. 解析 Jar 包元数据
-            PluginManifest manifest = parseManifest(tempPath);
-
-            // 3. 检查是否已存在
-            Optional<PluginDefinition> existing = pluginRepository
-                .findByPluginKeyAndVersion(manifest.getPluginKey(), manifest.getVersion());
-
-            if (existing.isPresent() && !force) {
-                pluginStorage.deleteTemp(tempPath);
-                throw new PluginAlreadyExistsException(manifest.getPluginKey(), manifest.getVersion());
-            }
-
-            // 4. 校验 Jar 包完整性
-            validateJar(tempPath, manifest);
-
-            // 5. 移动到正式目录
-            Path finalPath = pluginStorage.moveToFinal(tempPath, manifest);
-
-            // 6. 创建数据库记录
-            PluginDefinition plugin = PluginDefinition.builder()
-                .id(UUID.randomUUID().toString())
-                .pluginKey(manifest.getPluginKey())
-                .version(manifest.getVersion())
-                .name(manifest.getName())
-                .description(manifest.getDescription())
-                .vendor(manifest.getVendor())
-                .jarFileName(file.getOriginalFilename())
-                .jarFilePath(finalPath.toString())
-                .jarFileSize(file.getSize())
-                .jarChecksum(calculateChecksum(finalPath))
-                .dependencies(manifest.getDependencies())
-                .configSchema(manifest.getConfigSchema())
-                .defaultConfig(manifest.getDefaultConfig())
-                .state(PluginState.INSTALLED)
-                .permissions(manifest.getPermissions())
-                .build();
-
-            pluginRepository.save(plugin);
-
-            logger.info("Plugin installed: {} v{}", manifest.getPluginKey(), manifest.getVersion());
-
-            return plugin;
-
-        } catch (IOException e) {
-            throw new PluginInstallException("Failed to install plugin", e);
-        }
-    }
-
-    @Override
-    @Transactional
-    public void start(String pluginId) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
-
-        // 状态检查
-        if (plugin.getState() == PluginState.ACTIVE) {
-            logger.warn("Plugin {} is already active", pluginId);
-            return;
-        }
-
-        if (plugin.getState() == PluginState.STARTING) {
-            throw new PluginOperationException("Plugin is already starting: " + pluginId);
-        }
-
-        try {
-            // 更新状态
-            plugin.setState(PluginState.STARTING);
-            pluginRepository.save(plugin);
-
-            // 1. 创建类加载器
-            PluginClassLoader classLoader = createClassLoader(plugin);
-            loaderCache.put(pluginId, classLoader);
-
-            // 2. 解析依赖
-            resolveDependencies(plugin);
-
-            // 3. 创建插件上下文
-            PluginContext context = new PluginContext(plugin, classLoader);
-            pluginCache.put(pluginId, context);
-
-            // 4. 扫描并注册 Action
-            List<ActionDefinition> actions = pluginScanner.scan(plugin, classLoader);
-            actions.forEach(action -> {
-                actionRegistry.registerAction(action);
-                savePluginAction(pluginId, action);
-            });
-
-            // 5. 初始化插件 (调用插件的初始化方法)
-            initializePlugin(context);
-
-            // 6. 更新状态
-            plugin.setState(PluginState.ACTIVE);
-            plugin.setLoadedAt(LocalDateTime.now());
-            plugin.setActivatedAt(LocalDateTime.now());
-            plugin.setLastError(null);
-            pluginRepository.save(plugin);
-
-            // 发布事件
-            eventPublisher.publishEvent(new PluginStartedEvent(this, plugin));
-
-            logger.info("Plugin started: {} v{}", plugin.getPluginKey(), plugin.getVersion());
-
-        } catch (Exception e) {
-            plugin.setState(PluginState.FAILED);
-            plugin.setLastError(e.getMessage());
-            pluginRepository.save(plugin);
-
-            // 清理资源
-            cleanupPlugin(pluginId);
-
-            throw new PluginStartException("Failed to start plugin: " + pluginId, e);
-        }
-    }
-
-    @Override
-    @Transactional
-    public void stop(String pluginId) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
-
-        if (plugin.getState() != PluginState.ACTIVE) {
-            logger.warn("Plugin {} is not active, current state: {}", pluginId, plugin.getState());
-            return;
-        }
-
-        try {
-            plugin.setState(PluginState.STOPPING);
-            pluginRepository.save(plugin);
-
-            // 1. 注销 Action
-            List<PluginAction> pluginActions = pluginRepository.findActionsByPluginId(pluginId);
-            pluginActions.forEach(pa -> {
-                actionRegistry.unregisterAction(pa.getActionKey());
-            });
-
-            // 2. 调用插件的销毁方法
-            PluginContext context = pluginCache.get(pluginId);
-            if (context != null) {
-                destroyPlugin(context);
-            }
-
-            // 3. 清理资源
-            cleanupPlugin(pluginId);
-
-            // 4. 更新状态
-            plugin.setState(PluginState.STOPPED);
-            pluginRepository.save(plugin);
-
-            eventPublisher.publishEvent(new PluginStoppedEvent(this, plugin));
-
-            logger.info("Plugin stopped: {} v{}", plugin.getPluginKey(), plugin.getVersion());
-
-        } catch (Exception e) {
-            plugin.setState(PluginState.FAILED);
-            plugin.setLastError(e.getMessage());
-            pluginRepository.save(plugin);
-
-            throw new PluginStopException("Failed to stop plugin: " + pluginId, e);
-        }
-    }
-
-    @Override
-    @Transactional
-    public void uninstall(String pluginId) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
-
-        // 如果插件在运行，先停止
-        if (plugin.getState() == PluginState.ACTIVE) {
-            stop(pluginId);
-        }
-
-        // 删除数据库记录
-        pluginRepository.deleteById(pluginId);
-        pluginRepository.deleteActionsByPluginId(pluginId);
-
-        // 删除文件
-        try {
-            Files.deleteIfExists(Path.of(plugin.getJarFilePath()));
-        } catch (IOException e) {
-            logger.warn("Failed to delete plugin file: {}", plugin.getJarFilePath(), e);
-        }
-
-        eventPublisher.publishEvent(new PluginUninstalledEvent(this, plugin));
-
-        logger.info("Plugin uninstalled: {} v{}", plugin.getPluginKey(), plugin.getVersion());
-    }
-
-    @Override
-    public Page<PluginDefinition> list(String state, String keyword) {
-        // 实现分页查询
-        return pluginRepository.findAll(Pageable.unpaged());
-    }
-
-    @Override
-    public PluginDetail getDetail(String pluginId) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
-
-        List<PluginAction> actions = pluginRepository.findActionsByPluginId(pluginId);
-        PluginContext context = pluginCache.get(pluginId);
-
-        return PluginDetail.builder()
-            .definition(plugin)
-            .actions(actions)
-            .loadedClasses(context != null ? context.getLoadedClassCount() : 0)
-            .memoryUsage(context != null ? context.getMemoryUsage() : 0)
-            .build();
-    }
-
-    @Override
-    public void updateConfig(String pluginId, Map<String, Object> config) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
-
-        // 验证配置
-        validateConfig(plugin.getConfigSchema(), config);
-
-        // 更新配置
-        PluginContext context = pluginCache.get(pluginId);
-        if (context != null) {
-            context.updateConfig(config);
-        }
-
-        logger.info("Plugin config updated: {}", pluginId);
-    }
-
-    // ==================== 私有方法 ====================
-
-    private PluginClassLoader createClassLoader(PluginDefinition plugin) throws IOException {
-        Path jarPath = Path.of(plugin.getJarFilePath());
-
-        // 从配置中读取共享包和限制包
-        Set<String> sharedPackages = loadSharedPackages();
-        Set<String> restrictedPackages = loadRestrictedPackages(plugin);
-
-        return new PluginClassLoader(
-            plugin.getId(),
-            jarPath,
-            sharedPackages,
-            restrictedPackages
-        );
-    }
-
-    private void cleanupPlugin(String pluginId) {
-        // 移除类加载器
-        PluginClassLoader loader = loaderCache.remove(pluginId);
-        if (loader != null) {
-            try {
-                loader.close();
-            } catch (IOException e) {
-                logger.warn("Failed to close classloader for plugin: {}", pluginId, e);
-            }
-        }
-
-        // 移除上下文
-        pluginCache.remove(pluginId);
-    }
-
-    private void resolveDependencies(PluginDefinition plugin) {
-        // 检查依赖是否满足
-        List<PluginDependency> dependencies = plugin.getDependencies();
-        for (PluginDependency dep : dependencies) {
-            Optional<PluginDefinition> resolved = pluginRepository
-                .findActiveByPluginKey(dep.getPluginKey());
-
-            if (resolved.isEmpty()) {
-                throw new PluginDependencyException(
-                    "Dependency not satisfied: " + dep.getPluginKey());
-            }
-
-            // 版本范围检查
-            if (!dep.getVersionRange().matches(resolved.get().getVersion())) {
-                throw new PluginDependencyException(
-                    "Dependency version mismatch: " + dep.getPluginKey() +
-                    " required " + dep.getVersionRange() +
-                    " but found " + resolved.get().getVersion());
-            }
-        }
-    }
-
-    private void initializePlugin(PluginContext context) {
-        // 调用插件的初始化接口
-        try {
-            Class<?> activatorClass = context.loadClass("com.lowcode.plugin.PluginActivator");
-            Object activator = activatorClass.getDeclaredConstructor().newInstance();
-
-            if (activator instanceof PluginActivator) {
-                ((PluginActivator) activator).start(context);
-            }
-        } catch (ClassNotFoundException e) {
-            // 插件没有提供 Activator，忽略
-            logger.debug("No PluginActivator found for plugin: {}", context.getPluginId());
-        } catch (Exception e) {
-            throw new PluginStartException("Failed to initialize plugin", e);
-        }
-    }
-
-    private void destroyPlugin(PluginContext context) {
-        try {
-            Class<?> activatorClass = context.loadClass("com.lowcode.plugin.PluginActivator");
-            Object activator = activatorClass.getDeclaredConstructor().newInstance();
-
-            if (activator instanceof PluginActivator) {
-                ((PluginActivator) activator).stop(context);
-            }
-        } catch (Exception e) {
-            logger.warn("Error during plugin destroy: {}", context.getPluginId(), e);
-        }
-    }
-
-    private PluginManifest parseManifest(Path jarPath) throws IOException {
-        try (JarFile jarFile = new JarFile(jarPath.toFile())) {
-            JarEntry manifestEntry = jarFile.getJarEntry("plugin-manifest.json");
-            if (manifestEntry == null) {
-                throw new InvalidPluginException("Missing plugin-manifest.json");
-            }
-
-            try (InputStream is = jarFile.getInputStream(manifestEntry)) {
-                return new ObjectMapper().readValue(is, PluginManifest.class);
-            }
-        }
-    }
-
-    private void validateJar(Path jarPath, PluginManifest manifest) {
-        // 校验文件签名 (可选)
-        // 校验文件大小
-        // 校验恶意代码 (使用 ASM 扫描危险操作)
-    }
-
-    private String calculateChecksum(Path path) throws IOException {
-        // 计算 SHA-256
-        return ""; // 具体实现
-    }
-
-    private void validateConfig(JsonNode schema, Map<String, Object> config) {
-        // 使用 JSON Schema 验证配置
-    }
-
-    private void savePluginAction(String pluginId, ActionDefinition action) {
-        PluginAction pa = new PluginAction();
-        pa.setId(UUID.randomUUID().toString());
-        pa.setPluginId(pluginId);
-        pa.setActionKey(action.getQualifiedName());
-        pa.setActionName(action.getName());
-        pa.setResourceName(action.getResourceName());
-        pa.setEnabled(true);
-        pluginRepository.saveAction(pa);
-    }
-
-    private Set<String> loadSharedPackages() {
-        // 从配置加载共享包列表
-        return Set.of(
-            "com.lowcode.sdk",
-            "com.lowcode.action",
-            "org.springframework.beans",
-            "org.springframework.context"
-        );
-    }
-
-    private Set<String> loadRestrictedPackages(PluginDefinition plugin) {
-        // 合并默认限制和插件特定的限制
-        Set<String> restricted = new HashSet<>();
-        restricted.add("java.lang.reflect");  // 限制反射
-        restricted.add("sun.misc");
-        restricted.add("java.net.Socket");    // 限制网络 (除非显式授权)
-
-        // 从插件权限配置中添加限制
-        if (plugin.getPermissions() != null) {
-            List<String> additional = plugin.getPermissions().getRestrictedPackages();
-            if (additional != null) {
-                restricted.addAll(additional);
-            }
-        }
-
-        return restricted;
-    }
-}
-```
-
-### 5.3 插件扫描器
-
-```java
-/**
- * 扫描插件 Jar 包中的 Action
- */
-@Component
-public class DefaultPluginScanner implements PluginScanner {
-
-    private static final Logger logger = LoggerFactory.getLogger(DefaultPluginScanner.class);
-
-    @Override
-    public List<ActionDefinition> scan(PluginDefinition plugin, PluginClassLoader classLoader) {
-        List<ActionDefinition> actions = new ArrayList<>();
-
-        try {
-            // 1. 从 manifest 中读取扫描路径
-            List<String> scanPackages = plugin.getScanPackages();
-            if (scanPackages == null || scanPackages.isEmpty()) {
-                scanPackages = List.of("com.lowcode.plugin.action"); // 默认路径
-            }
-
-            // 2. 扫描 Jar 包中的类
-            Path jarPath = Path.of(plugin.getJarFilePath());
-
-            try (JarFile jarFile = new JarFile(jarPath.toFile())) {
-                Enumeration<JarEntry> entries = jarFile.entries();
-
-                while (entries.hasMoreElements()) {
-                    JarEntry entry = entries.nextElement();
-                    String entryName = entry.getName();
-
-                    // 只处理 .class 文件
-                    if (!entryName.endsWith(".class")) {
-                        continue;
-                    }
-
-                    // 转换为类名
-                    String className = entryName.replace("/", ".")
-                                                .replace(".class", "");
-
-                    // 检查是否在扫描包路径下
-                    if (!isInScanPackages(className, scanPackages)) {
-                        continue;
-                    }
-
-                    // 加载类并扫描 Action
-                    try {
-                        Class<?> clazz = classLoader.loadClass(className);
-                        List<ActionDefinition> classActions = scanClass(clazz, plugin);
-                        actions.addAll(classActions);
-                    } catch (Throwable e) {
-                        logger.warn("Failed to scan class: {}", className, e);
-                    }
-                }
-            }
-
-            logger.info("Scanned {} actions from plugin {} v{}",
-                actions.size(), plugin.getPluginKey(), plugin.getVersion());
-
-            return actions;
-
-        } catch (IOException e) {
-            throw new PluginScanException("Failed to scan plugin: " + plugin.getPluginKey(), e);
-        }
-    }
-
-    private List<ActionDefinition> scanClass(Class<?> clazz, PluginDefinition plugin) {
-        List<ActionDefinition> actions = new ArrayList<>();
-
-        // 检查是否有 @ActionResource 注解
-        ActionResource resourceAnnotation = clazz.getAnnotation(ActionResource.class);
-        if (resourceAnnotation == null) {
-            return actions;
-        }
-
-        String resourceName = resourceAnnotation.value();
-        String namespace = resourceAnnotation.namespace();
-
-        // 创建 Bean 实例
-        Object bean = createBean(clazz);
-        if (bean == null) {
-            logger.warn("Failed to create bean for class: {}", clazz.getName());
-            return actions;
-        }
-
-        // 扫描所有方法
-        for (Method method : clazz.getDeclaredMethods()) {
-            Action actionAnnotation = method.getAnnotation(Action.class);
-            if (actionAnnotation == null) {
-                continue;
-            }
-
-            try {
-                ActionDefinition action = buildActionDefinition(
-                    plugin, namespace, resourceName,
-                    actionAnnotation, method, bean
-                );
-                actions.add(action);
-            } catch (Exception e) {
-                logger.warn("Failed to build action for method: {}", method.getName(), e);
-            }
-        }
-
-        return actions;
-    }
-
-    private ActionDefinition buildActionDefinition(
-            PluginDefinition plugin,
-            String namespace,
-            String resourceName,
-            Action actionAnnotation,
-            Method method,
-            Object target) {
-
-        String actionName = actionAnnotation.name();
-        String qualifiedName = String.format("%s.%s.%s:%s",
-            namespace, resourceName, actionName, plugin.getVersion());
-
-        // 构建处理器
-        ActionHandler handler = createHandler(method, target, plugin.getId());
-
-        return DefaultActionDefinition.builder()
-            .name(actionName)
-            .title(actionAnnotation.title())
-            .description(actionAnnotation.description())
-            .resourceName(resourceName)
-            .serviceName(plugin.getPluginKey())
-            .metadata(buildMetadata(method))
-            .handler(handler)
-            .remote(false)
-            .build();
-    }
-
-    private ActionHandler createHandler(Method method, Object target, String pluginId) {
-        return context -> {
-            try {
-                // 解析参数
-                Object[] args = resolveArguments(method, context);
-
-                // 调用方法
-                Object result = method.invoke(target, args);
-
-                return result;
-            } catch (InvocationTargetException e) {
-                Throwable cause = e.getCause();
-                if (cause instanceof ActionException) {
-                    throw (ActionException) cause;
-                }
-                throw new ActionExecutionException("Action execution failed in plugin: " + pluginId, cause);
-            } catch (Exception e) {
-                throw new ActionExecutionException("Action execution failed in plugin: " + pluginId, e);
-            }
-        };
-    }
-
-    private Object[] resolveArguments(Method method, ActionContext context) {
-        Parameter[] parameters = method.getParameters();
-        Object[] args = new Object[parameters.length];
-
-        for (int i = 0; i < parameters.length; i++) {
-            Parameter param = parameters[i];
-            Class<?> paramType = param.getType();
-
-            // 如果是 ActionContext 类型，直接注入
-            if (ActionContext.class.isAssignableFrom(paramType)) {
-                args[i] = context;
-                continue;
-            }
-
-            // 从参数中获取
-            ActionParam paramAnnotation = param.getAnnotation(ActionParam.class);
-            if (paramAnnotation != null) {
-                String paramName = paramAnnotation.value();
-                Object value = context.getParam(paramName);
-
-                // 类型转换
-                args[i] = convertType(value, paramType);
-            }
-        }
-
-        return args;
-    }
-
-    private Object convertType(Object value, Class<?> targetType) {
-        if (value == null) {
-            return null;
-        }
-
-        if (targetType.isInstance(value)) {
-            return value;
-        }
-
-        // 基本类型转换
-        // 使用 Spring ConversionService 或其他转换器
-        return value;
-    }
-
-    private Object createBean(Class<?> clazz) {
-        try {
-            // 简单实现：使用无参构造器
-            return clazz.getDeclaredConstructor().newInstance();
-        } catch (Exception e) {
-            logger.error("Failed to create bean for class: {}", clazz.getName(), e);
-            return null;
-        }
-    }
-
-    private boolean isInScanPackages(String className, List<String> scanPackages) {
-        return scanPackages.stream().anyMatch(className::startsWith);
-    }
-
-    private ActionMetadata buildMetadata(Method method) {
-        // 构建输入/输出 Schema
-        return ActionMetadata.builder()
-            .version("1.0.0")
-            .build();
-    }
-}
-```
-
-### 5.4 安全沙箱
-
-```java
-/**
- * 插件安全沙箱
- * 限制插件的操作权限
- */
-@Component
-public class PluginSecurityManager {
-
-    // 线程本地存储当前执行的插件 ID
-    private static final ThreadLocal<String> currentPlugin = new ThreadLocal<>();
-
-    /**
-     * 在插件上下文中执行代码
-     */
-    public <T> T executeInSandbox(String pluginId, Callable<T> callable) throws Exception {
-        String previousPlugin = currentPlugin.get();
-        currentPlugin.set(pluginId);
-
-        try {
-            // 设置安全管理器 (如果需要)
-            return callable.call();
-        } finally {
-            if (previousPlugin == null) {
-                currentPlugin.remove();
-            } else {
-                currentPlugin.set(previousPlugin);
-            }
-        }
-    }
-
-    /**
-     * 检查当前是否有插件在执行
-     */
-    public static boolean isInPluginContext() {
-        return currentPlugin.get() != null;
-    }
-
-    /**
-     * 获取当前执行的插件 ID
-     */
-    public static String getCurrentPluginId() {
-        return currentPlugin.get();
-    }
-
-    /**
-     * 检查插件是否有特定权限
-     */
-    public boolean checkPermission(String pluginId, PluginPermission permission) {
-        PluginDefinition plugin = getPlugin(pluginId);
-        if (plugin == null || plugin.getPermissions() == null) {
-            return false;
-        }
-
-        return plugin.getPermissions().hasPermission(permission);
-    }
-
-    /**
-     * 检查文件系统访问权限
-     */
-    public void checkFileAccess(String pluginId, String path, FileAccessType accessType) {
-        PluginDefinition plugin = getPlugin(pluginId);
-
-        // 默认只允许访问插件自己的工作目录
-        List<String> allowedPaths = plugin.getPermissions() != null
-            ? plugin.getPermissions().getAllowedPaths()
-            : Collections.emptyList();
-
-        boolean allowed = allowedPaths.stream().anyMatch(path::startsWith);
-
-        if (!allowed) {
-            throw new SecurityException(
-                "Plugin " + pluginId + " does not have permission to " +
-                accessType + " path: " + path);
-        }
-    }
-
-    /**
-     * 检查网络访问权限
-     */
-    public void checkNetworkAccess(String pluginId, String host, int port) {
-        PluginDefinition plugin = getPlugin(pluginId);
-
-        boolean networkAllowed = plugin.getPermissions() != null
-            && plugin.getPermissions().isNetworkAccessAllowed();
-
-        if (!networkAllowed) {
-            throw new SecurityException(
-                "Plugin " + pluginId + " does not have network access permission");
-        }
-
-        // 检查白名单
-        List<String> allowedHosts = plugin.getPermissions().getAllowedHosts();
-        if (allowedHosts != null && !allowedHosts.isEmpty()) {
-            boolean hostAllowed = allowedHosts.stream().anyMatch(host::matches);
-            if (!hostAllowed) {
-                throw new SecurityException(
-                    "Plugin " + pluginId + " cannot access host: " + host);
-            }
-        }
-    }
-
-    private PluginDefinition getPlugin(String pluginId) {
-        // 从数据库或缓存获取
-        return null;
-    }
-}
-
-/**
- * 插件权限定义
- */
-@Data
-public class PluginPermissions {
-
-    // 文件系统权限
-    private boolean fileReadAllowed = true;
-    private boolean fileWriteAllowed = false;
-    private List<String> allowedPaths = new ArrayList<>();
-
-    // 网络权限
-    private boolean networkAccessAllowed = false;
-    private List<String> allowedHosts = new ArrayList<>();
-
-    // 反射权限
-    private boolean reflectionAllowed = false;
-
-    // 系统权限
-    private boolean systemExitAllowed = false;
-    private boolean execCommandAllowed = false;
-
-    // 限制访问的包
-    private List<String> restrictedPackages = new ArrayList<>();
-
-    public boolean hasPermission(PluginPermission permission) {
-        return switch (permission) {
-            case FILE_READ -> fileReadAllowed;
-            case FILE_WRITE -> fileWriteAllowed;
-            case NETWORK_ACCESS -> networkAccessAllowed;
-            case REFLECTION -> reflectionAllowed;
-            case SYSTEM_EXIT -> systemExitAllowed;
-            case EXEC_COMMAND -> execCommandAllowed;
-        };
-    }
-}
-
-enum PluginPermission {
-    FILE_READ,
-    FILE_WRITE,
-    NETWORK_ACCESS,
-    REFLECTION,
-    SYSTEM_EXIT,
-    EXEC_COMMAND
-}
-
-enum FileAccessType {
-    READ,
-    WRITE,
-    DELETE
-}
+## 6. 数据模型
+
+### 6.1 插件信息表
+
+```sql
+-- 使用 PF4J 内置的插件管理，但可扩展存储额外信息
+CREATE TABLE plugin_metadata (
+    plugin_id           VARCHAR(64) PRIMARY KEY,
+    namespace           VARCHAR(128) NOT NULL,
+    name                VARCHAR(100) NOT NULL,
+    description         TEXT,
+    vendor              VARCHAR(100),
+
+    -- 扩展配置
+    config_schema       JSON,
+    runtime_config      JSON,
+
+    -- 统计信息
+    load_count          INT DEFAULT 0,
+    last_loaded_at      DATETIME,
+
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- Action 注册表 (与 PF4J 插件关联)
+CREATE TABLE plugin_action (
+    id                  VARCHAR(64) PRIMARY KEY,
+    plugin_id           VARCHAR(64) NOT NULL,
+    namespace           VARCHAR(128) NOT NULL,
+    action_name         VARCHAR(64) NOT NULL,
+    action_title        VARCHAR(100),
+    description         TEXT,
+
+    input_schema        JSON,
+    output_schema       JSON,
+
+    enabled             BOOLEAN DEFAULT TRUE,
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE KEY uk_plugin_action (plugin_id, action_name),
+    INDEX idx_namespace (namespace)
+);
 ```
 
 ---
 
-## 6. 配置文件
+## 7. API 概览
 
-### 6.1 插件清单 (plugin-manifest.json)
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/plugins` | 获取所有插件 |
+| GET | `/api/plugins/{id}` | 获取插件详情 |
+| POST | `/api/plugins` | 上传插件 |
+| POST | `/api/plugins/{id}/start` | 启动插件 |
+| POST | `/api/plugins/{id}/stop` | 停止插件 |
+| POST | `/api/plugins/{id}/restart` | 重启插件 |
+| DELETE | `/api/plugins/{id}` | 卸载插件 |
 
-```json
-{
-  "pluginKey": "com.example.file-storage",
-  "version": "1.2.0",
-  "name": "文件存储插件",
-  "description": "提供文件上传、下载、预览等功能",
-  "vendor": "Example Corp",
-  "minPlatformVersion": "2.0.0",
+---
 
-  "scanPackages": [
-    "com.example.filestorage.action"
-  ],
+## 8. 配置示例
 
-  "dependencies": [
-    {
-      "pluginKey": "com.example.common-utils",
-      "versionRange": "[1.0.0,2.0.0)"
-    }
-  ],
-
-  "configSchema": {
-    "type": "object",
-    "properties": {
-      "storageType": {
-        "type": "string",
-        "enum": ["local", "oss", "s3"],
-        "default": "local"
-      },
-      "maxFileSize": {
-        "type": "integer",
-        "default": 104857600
-      }
-    }
-  },
-
-  "defaultConfig": {
-    "storageType": "local",
-    "maxFileSize": 104857600
-  },
-
-  "permissions": {
-    "fileReadAllowed": true,
-    "fileWriteAllowed": true,
-    "networkAccessAllowed": true,
-    "allowedHosts": ["*.aliyun.com", "*.amazonaws.com"],
-    "reflectionAllowed": false,
-    "systemExitAllowed": false,
-    "execCommandAllowed": false,
-    "restrictedPackages": [
-      "java.lang.reflect",
-      "sun.misc"
-    ]
-  }
-}
-```
-
-### 6.2 应用配置 (application.yml)
+### 8.1 application.yml
 
 ```yaml
+server:
+  port: 8080
+
+# 插件配置
 plugin:
-  # 存储配置
-  storage:
-    path: ./plugins
-    max-file-size: 100MB
-
-  # 类加载器配置
-  classloader:
-    # 共享的包 (这些包由父加载器加载)
-    shared-packages:
-      - com.lowcode.sdk
-      - com.lowcode.action
-      - org.springframework.beans
-      - org.springframework.context
-      - org.slf4j
-
-    # 默认限制访问的包
-    restricted-packages:
-      - java.lang.reflect
-      - sun.misc
-      - java.net.Socket
-
-  # 安全沙箱配置
-  security:
-    enabled: true
-    default-file-access: read-only
-    default-network-access: false
-
-  # 热加载配置
-  hot-reload:
-    enabled: true
-    watch-interval: 5000ms
-
-  # 资源限制
-  resource:
-    max-memory-per-plugin: 128MB
-    max-threads-per-plugin: 10
+  path: ./plugins
+  auto-load: true
+  auto-start: true
 ```
 
----
-
-## 7. 生命周期状态图
-
-```
-                    upload/install
-    ┌─────────────────────────────────┐
-    │                                 ▼
-    │                           ┌──────────┐
-    │                           │ INSTALLED│
-    │                           └────┬─────┘
-    │                                │ resolve dependencies
-    │                                ▼
-    │                           ┌──────────┐
-    │                           │ RESOLVED │
-    │                           └────┬─────┘
-    │                                │ start
-    │                                ▼
-    │  ┌─────────────────────┐  ┌──────────┐
-    │  │◄────── error ───────┤  │ STARTING │
-    │  │                     │  └────┬─────┘
-    │  │                     │       │ init success
-    │  ▼                     │       ▼
-┌───┴───┐                   │  ┌──────────┐
-│ FAILED│                   │  │  ACTIVE  │◄────────┐
-└───────┘                   │  └────┬─────┘         │
-                            │       │               │
-                            │       │ stop          │ update config
-                            │       ▼               │
-                            │  ┌──────────┐         │
-                            │  │ STOPPING │         │
-                            │  └────┬─────┘         │
-                            │       │               │
-                            │       ▼               │
-                            │  ┌──────────┐         │
-                            └──┤ STOPPED  ├─────────┘
-                               └────┬─────┘
-                                    │ uninstall
-                                    ▼
-                               ┌──────────┐
-                               │UNINSTALLED│
-                               └──────────┘
-```
-
----
-
-## 8. 使用示例
-
-### 8.1 上传并启动插件
+### 8.2 打包命令
 
 ```bash
-# 上传插件
-curl -X POST http://localhost:8080/api/plugins \
-  -F "file=@file-storage-plugin-1.2.0.jar"
+# 1. 安装 API 模块
+cd action-api
+mvn install
 
-# 响应
-{
-  "id": "plugin-123",
-  "pluginKey": "com.example.file-storage",
-  "version": "1.2.0",
-  "state": "INSTALLED"
-}
+# 2. 构建主应用
+cd ../action-server
+mvn package
 
-# 启动插件
-curl -X POST http://localhost:8080/api/plugins/plugin-123/start
+# 3. 构建插件
+cd ../plugins/file-storage-plugin
+mvn package
 
-# 查看插件详情
-curl http://localhost:8080/api/plugins/plugin-123
-
-# 响应
-{
-  "definition": { ... },
-  "actions": [
-    {
-      "actionKey": "storage.file.upload:1.2.0",
-      "actionName": "upload"
-    },
-    {
-      "actionKey": "storage.file.download:1.2.0",
-      "actionName": "download"
-    }
-  ],
-  "loadedClasses": 156,
-  "memoryUsage": 24576000
-}
-
-# 停止插件
-curl -X POST http://localhost:8080/api/plugins/plugin-123/stop
-
-# 卸载插件
-curl -X DELETE http://localhost:8080/api/plugins/plugin-123
-```
-
-### 8.2 插件代码示例
-
-```java
-// PluginActivator.java - 插件生命周期管理
-package com.example.filestorage;
-
-import com.lowcode.plugin.PluginActivator;
-import com.lowcode.plugin.PluginContext;
-
-public class FileStorageActivator implements PluginActivator {
-
-    private FileStorageService service;
-
-    @Override
-    public void start(PluginContext context) {
-        // 读取配置
-        Map<String, Object> config = context.getConfig();
-        String storageType = (String) config.get("storageType");
-
-        // 初始化服务
-        service = new FileStorageService(storageType);
-        service.initialize();
-
-        context.log("File storage plugin started with type: " + storageType);
-    }
-
-    @Override
-    public void stop(PluginContext context) {
-        // 清理资源
-        if (service != null) {
-            service.shutdown();
-        }
-
-        context.log("File storage plugin stopped");
-    }
-}
-
-// FileResource.java - Action 定义
-package com.example.filestorage.action;
-
-import com.lowcode.action.annotation.*;
-
-@ActionResource(
-    value = "file",
-    namespace = "storage",
-    description = "文件管理"
-)
-public class FileResource {
-
-    @Action(
-        name = "upload",
-        title = "上传文件",
-        description = "上传文件到存储系统"
-    )
-    public UploadResult upload(
-            @ActionParam("fileName") String fileName,
-            @ActionParam("content") byte[] content,
-            @ActionParam(value = "folder", defaultValue = "/") String folder) {
-
-        // 实现上传逻辑
-        return new UploadResult(fileId, url);
-    }
-
-    @Action(
-        name = "download",
-        title = "下载文件",
-        description = "下载文件内容"
-    )
-    public byte[] download(
-            @ActionParam("fileId") String fileId) {
-
-        // 实现下载逻辑
-        return content;
-    }
-}
+# 4. 复制插件到目录
+cp target/file-storage-plugin-1.0.0.jar ../../action-server/plugins/
 ```
 
 ---
 
 ## 9. 注意事项
 
-### 9.1 类加载隔离
+### 9.1 依赖管理
 
-- 每个插件使用独立的 ClassLoader
-- 核心类（Java 标准库、Spring 框架）由父加载器加载
-- 插件间共享的接口/类需配置到 `shared-packages`
+- `action-api` 必须声明为 `provided` scope
+- Spring 相关依赖也应声明为 `provided`
+- 插件之间的依赖通过 `Plugin-Dependencies` manifest 声明
 
-### 9.2 内存泄漏防范
+### 9.2 类加载
 
-- 插件卸载时清理所有线程
-- 移除所有注册的监听器和回调
-- 关闭插件创建的数据库连接等资源
+- 主应用类由 AppClassLoader 加载
+- 插件类由 SpringPluginClassLoader 加载
+- 共享接口/类必须放在 action-api 中
 
-### 9.3 安全风险
+### 9.3 资源释放
 
-- 始终使用安全沙箱限制插件权限
-- 对上传的 Jar 包进行病毒扫描
-- 验证 Jar 包的数字签名（可选）
-- 限制插件的内存和 CPU 使用
+插件卸载时需要注意：
+- 关闭数据库连接池
+- 停止后台线程
+- 清理临时文件
+- 注销事件监听器
 
-### 9.4 兼容性
+---
 
-- 插件需声明最低平台版本要求
-- 插件依赖的其他插件需明确版本范围
-- 平台升级时需检查插件兼容性
+## 10. 参考资源
+
+- [PF4J GitHub](https://github.com/pf4j/pf4j)
+- [pf4j-spring GitHub](https://github.com/clyoudu/pf4j-spring)
+- [PF4J 文档](https://pf4j.org/doc/)

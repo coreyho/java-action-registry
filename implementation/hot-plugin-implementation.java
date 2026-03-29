@@ -1,787 +1,481 @@
 /**
- * Java Jar 包热注册核心实现
+ * PF4J + Spring Boot 热注册实现代码
  *
  * 包含:
- * 1. PluginClassLoader - 插件隔离类加载器
- * 2. PluginManager - 插件生命周期管理
- * 3. PluginScanner - 插件 Action 扫描
- * 4. PluginSecurityManager - 安全沙箱
- * 5. PluginContext - 插件运行时上下文
+ * 1. ActionPlugin 扩展点接口
+ * 2. SpringPluginManager 配置
+ * 3. ActionDispatchService 分发服务
+ * 4. PluginController 管理 API
+ * 5. 示例插件实现
  */
 
-// ==================== 1. 插件类加载器 ====================
+// ==================== 1. 插件 API 定义 (action-api) ====================
 
-package com.lowcode.plugin.core;
+package com.example.action;
 
-import java.io.IOException;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.Path;
-import java.util.Collections;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-
-/**
- * 插件隔离的类加载器
- *
- * 加载策略:
- * 1. 先委托父加载器加载核心类 (java.*, javax.*, org.springframework.*)
- * 2. 再从插件 Jar 中加载类
- * 3. 支持共享类机制 (Shared Classes)
- */
-public class PluginClassLoader extends URLClassLoader {
-
-    private final String pluginId;
-    private final Set<String> sharedPackages;
-    private final Set<String> restrictedPackages;
-    private final ClassLoader parentLoader;
-
-    // 记录已加载的类数量
-    private final ConcurrentHashMap<String, Class<?>> loadedClasses = new ConcurrentHashMap<>();
-
-    public PluginClassLoader(String pluginId,
-                             Path jarPath,
-                             Set<String> sharedPackages,
-                             Set<String> restrictedPackages) throws IOException {
-        super(new URL[] { jarPath.toUri().toURL() }, null);
-        this.pluginId = pluginId;
-        this.sharedPackages = sharedPackages != null ? sharedPackages : Collections.emptySet();
-        this.restrictedPackages = restrictedPackages != null ? restrictedPackages : Collections.emptySet();
-        this.parentLoader = getSystemClassLoader();
-    }
-
-    @Override
-    protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-        // 1. 检查是否是被限制的类
-        if (isRestricted(name)) {
-            throw new SecurityException("Access to class " + name + " is restricted in plugin " + pluginId);
-        }
-
-        // 2. 检查是否已加载
-        Class<?> clazz = findLoadedClass(name);
-        if (clazz != null) {
-            return resolveClass(clazz, resolve);
-        }
-
-        // 3. 核心类委托给父加载器
-        if (isCoreClass(name)) {
-            try {
-                clazz = parentLoader.loadClass(name);
-                return resolveClass(clazz, resolve);
-            } catch (ClassNotFoundException ignored) {
-            }
-        }
-
-        // 4. 共享包委托给父加载器
-        if (isSharedPackage(name)) {
-            try {
-                clazz = parentLoader.loadClass(name);
-                return resolveClass(clazz, resolve);
-            } catch (ClassNotFoundException ignored) {
-            }
-        }
-
-        // 5. 从插件 Jar 中加载
-        try {
-            clazz = findClass(name);
-            loadedClasses.put(name, clazz);
-            return resolveClass(clazz, resolve);
-        } catch (ClassNotFoundException e) {
-            // 最后委托给父加载器
-            clazz = parentLoader.loadClass(name);
-            return resolveClass(clazz, resolve);
-        }
-    }
-
-    private boolean isCoreClass(String name) {
-        return name.startsWith("java.") ||
-               name.startsWith("javax.") ||
-               name.startsWith("sun.") ||
-               name.startsWith("com.sun.") ||
-               name.startsWith("jdk.");
-    }
-
-    private boolean isSharedPackage(String name) {
-        return sharedPackages.stream().anyMatch(name::startsWith);
-    }
-
-    private boolean isRestricted(String name) {
-        return restrictedPackages.stream().anyMatch(name::startsWith);
-    }
-
-    private Class<?> resolveClass(Class<?> clazz, boolean resolve) {
-        if (resolve) {
-            resolveClass(clazz);
-        }
-        return clazz;
-    }
-
-    public int getLoadedClassCount() {
-        return loadedClasses.size();
-    }
-
-    public String getPluginId() {
-        return pluginId;
-    }
-
-    @Override
-    public void close() throws IOException {
-        loadedClasses.clear();
-        super.close();
-    }
-}
-
-// ==================== 2. 插件管理器接口 ====================
-
-package com.lowcode.plugin.core;
-
-import org.springframework.data.domain.Page;
-import org.springframework.web.multipart.MultipartFile;
-
+import org.pf4j.ExtensionPoint;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 插件管理器接口
+ * Action 插件扩展点
+ * 所有 Action 插件必须实现此接口
  */
-public interface PluginManager {
+public interface ActionPlugin extends ExtensionPoint {
 
     /**
-     * 安装插件
-     *
-     * @param file 插件 Jar 文件
-     * @param force 是否强制覆盖已存在的版本
-     * @return 插件定义
+     * 获取插件命名空间
+     * 例如: storage.file, order.service
      */
-    PluginDefinition install(MultipartFile file, boolean force);
+    String getNamespace();
 
     /**
-     * 启动插件
-     *
-     * @param pluginId 插件 ID
+     * 获取插件版本
+     * 例如: 1.0.0
      */
-    void start(String pluginId);
+    String getVersion();
 
     /**
-     * 停止插件
-     *
-     * @param pluginId 插件 ID
+     * 获取插件提供的 Actions
      */
-    void stop(String pluginId);
+    List<ActionDefinition> getActions();
 
     /**
-     * 卸载插件
+     * 执行 Action
      *
-     * @param pluginId 插件 ID
+     * @param actionName Action 名称
+     * @param params 输入参数
+     * @return 执行结果
      */
-    void uninstall(String pluginId);
+    Object execute(String actionName, Map<String, Object> params);
+}
 
-    /**
-     * 重启插件
-     *
-     * @param pluginId 插件 ID
-     */
-    default void restart(String pluginId) {
-        stop(pluginId);
-        start(pluginId);
+/**
+ * Action 定义
+ */
+package com.example.action;
+
+import lombok.Data;
+import java.util.Map;
+
+@Data
+public class ActionDefinition {
+    private String name;
+    private String title;
+    private String description;
+    private Map<String, Object> inputSchema;
+    private Map<String, Object> outputSchema;
+
+    public ActionDefinition(String name, String title) {
+        this.name = name;
+        this.title = title;
+    }
+}
+
+// ==================== 2. 主应用配置 (action-server) ====================
+
+package com.example.server.config;
+
+import org.pf4j.spring.SpringPluginManager;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+/**
+ * PF4J Spring 配置
+ */
+@Configuration
+public class PluginConfig {
+
+    @Bean
+    public SpringPluginManager pluginManager() {
+        return new SpringPluginManager(Paths.get("./plugins"));
+    }
+
+    @Bean
+    public PluginLoader pluginLoader(SpringPluginManager pluginManager) {
+        return new PluginLoader(pluginManager);
+    }
+}
+
+/**
+ * 插件加载器
+ */
+package com.example.server.config;
+
+import org.pf4j.spring.SpringPluginManager;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.stereotype.Component;
+
+@Component
+public class PluginLoader implements CommandLineRunner {
+
+    private final SpringPluginManager pluginManager;
+
+    public PluginLoader(SpringPluginManager pluginManager) {
+        this.pluginManager = pluginManager;
+    }
+
+    @Override
+    public void run(String... args) {
+        // 加载所有插件
+        pluginManager.loadPlugins();
+
+        // 启动所有插件
+        pluginManager.startPlugins();
+
+        System.out.println("Loaded " + pluginManager.getPlugins().size() + " plugins");
+        pluginManager.getPlugins().forEach(p -> {
+            System.out.println("  - " + p.getPluginId() + " [" + p.getPluginState() + "]");
+        });
+    }
+}
+
+// ==================== 3. Action 分发服务 ====================
+
+package com.example.server.service;
+
+import com.example.action.ActionDefinition;
+import com.example.action.ActionPlugin;
+import org.pf4j.spring.SpringPluginManager;
+import org.springframework.stereotype.Service;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * Action 分发服务
+ */
+@Service
+public class ActionDispatchService {
+
+    private final SpringPluginManager pluginManager;
+
+    public ActionDispatchService(SpringPluginManager pluginManager) {
+        this.pluginManager = pluginManager;
     }
 
     /**
-     * 查询插件列表
-     *
-     * @param state 状态筛选
-     * @param keyword 关键词搜索
-     * @return 分页结果
+     * 获取所有可用的 Actions
      */
-    Page<PluginDefinition> list(String state, String keyword);
+    public Map<String, List<ActionDefinition>> getAllActions() {
+        Map<String, List<ActionDefinition>> result = new HashMap<>();
+
+        List<ActionPlugin> plugins = pluginManager.getExtensions(ActionPlugin.class);
+        for (ActionPlugin plugin : plugins) {
+            result.put(plugin.getNamespace(), plugin.getActions());
+        }
+
+        return result;
+    }
 
     /**
-     * 获取插件详情
-     *
-     * @param pluginId 插件 ID
-     * @return 详细信息
+     * 执行 Action
      */
-    PluginDetail getDetail(String pluginId);
+    public Object execute(String namespace, String actionName, Map<String, Object> params) {
+        ActionPlugin plugin = findPlugin(namespace);
+        if (plugin == null) {
+            throw new RuntimeException("Plugin not found: " + namespace);
+        }
+
+        boolean actionExists = plugin.getActions().stream()
+            .anyMatch(a -> a.getName().equals(actionName));
+        if (!actionExists) {
+            throw new RuntimeException("Action not found: " + actionName + " in plugin " + namespace);
+        }
+
+        return plugin.execute(actionName, params);
+    }
 
     /**
-     * 更新插件配置
-     *
-     * @param pluginId 插件 ID
-     * @param config 配置项
+     * 批量执行 Actions
      */
-    void updateConfig(String pluginId, Map<String, Object> config);
+    public Map<String, Object> executeBatch(List<ActionRequest> requests) {
+        Map<String, Object> results = new HashMap<>();
+        for (ActionRequest request : requests) {
+            try {
+                Object result = execute(
+                    request.getNamespace(),
+                    request.getActionName(),
+                    request.getParams()
+                );
+                results.put(request.getRequestId(), result);
+            } catch (Exception e) {
+                results.put(request.getRequestId(), Map.of(
+                    "error", true,
+                    "message", e.getMessage()
+                ));
+            }
+        }
+        return results;
+    }
 
-    /**
-     * 获取插件日志
-     *
-     * @param pluginId 插件 ID
-     * @param limit 日志条数
-     * @return 日志列表
-     */
-    List<PluginLog> getLogs(String pluginId, int limit);
-
-    /**
-     * 根据状态获取插件
-     */
-    List<PluginDefinition> getByState(PluginState state);
+    private ActionPlugin findPlugin(String namespace) {
+        List<ActionPlugin> plugins = pluginManager.getExtensions(ActionPlugin.class);
+        return plugins.stream()
+            .filter(p -> p.getNamespace().equals(namespace))
+            .findFirst()
+            .orElse(null);
+    }
 }
 
-// ==================== 3. 插件管理器实现 ====================
+/**
+ * Action 执行请求
+ */
+package com.example.server.service;
 
-package com.lowcode.plugin.core;
+import lombok.Data;
+import java.util.Map;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.lowcode.action.core.*;
-import com.lowcode.action.registry.GlobalActionRegistry;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+@Data
+public class ActionRequest {
+    private String requestId;
+    private String namespace;
+    private String actionName;
+    private Map<String, Object> params;
+}
+
+// ==================== 4. 插件管理 API ====================
+
+package com.example.server.controller;
+
+import org.pf4j.PluginState;
+import org.pf4j.PluginWrapper;
+import org.pf4j.spring.SpringPluginManager;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.time.LocalDateTime;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.jar.JarEntry;
-import java.util.jar.JarFile;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
-@Service
-public class DefaultPluginManager implements PluginManager {
+@RestController
+@RequestMapping("/api/plugins")
+public class PluginController {
 
-    private static final Logger logger = LoggerFactory.getLogger(DefaultPluginManager.class);
+    private final SpringPluginManager pluginManager;
+    private final Path pluginPath = Paths.get("./plugins");
 
-    @Autowired
-    private PluginRepository pluginRepository;
-
-    @Autowired
-    private GlobalActionRegistry actionRegistry;
-
-    @Autowired
-    private PluginScanner pluginScanner;
-
-    @Autowired
-    private ApplicationEventPublisher eventPublisher;
-
-    @Value("${plugin.storage.path:./plugins}")
-    private String pluginStoragePath;
-
-    // 插件加载器缓存: pluginId -> PluginClassLoader
-    private final ConcurrentHashMap<String, PluginClassLoader> loaderCache = new ConcurrentHashMap<>();
-
-    // 插件上下文缓存: pluginId -> PluginContext
-    private final ConcurrentHashMap<String, PluginContext> pluginCache = new ConcurrentHashMap<>();
-
-    // 共享包配置
-    private final Set<String> sharedPackages = new HashSet<>();
-
-    // 默认限制包
-    private final Set<String> defaultRestrictedPackages = Set.of(
-        "java.lang.reflect",
-        "sun.misc",
-        "sun.reflect"
-    );
-
-    public DefaultPluginManager() {
-        // 初始化共享包
-        sharedPackages.addAll(Set.of(
-            "com.lowcode.sdk",
-            "com.lowcode.action",
-            "org.springframework.beans",
-            "org.springframework.context",
-            "org.slf4j"
-        ));
+    public PluginController(SpringPluginManager pluginManager) {
+        this.pluginManager = pluginManager;
     }
 
-    @Override
-    @Transactional
-    public PluginDefinition install(MultipartFile file, boolean force) {
-        try {
-            // 1. 保存到临时文件
-            Path tempPath = saveTempFile(file);
+    @GetMapping
+    public List<PluginInfo> listPlugins() {
+        return pluginManager.getPlugins().stream()
+            .map(this::toPluginInfo)
+            .collect(Collectors.toList());
+    }
 
-            // 2. 解析 Manifest
-            PluginManifest manifest = parseManifest(tempPath);
-
-            // 3. 检查是否存在
-            Optional<PluginDefinition> existing = pluginRepository
-                .findByPluginKeyAndVersion(manifest.getPluginKey(), manifest.getVersion());
-
-            if (existing.isPresent() && !force) {
-                Files.deleteIfExists(tempPath);
-                throw new PluginAlreadyExistsException(manifest.getPluginKey(), manifest.getVersion());
-            }
-
-            // 4. 校验 Jar
-            validateJar(tempPath, manifest);
-
-            // 5. 移动到正式目录
-            Path finalPath = moveToFinal(tempPath, manifest);
-
-            // 6. 保存到数据库
-            PluginDefinition plugin = new PluginDefinition();
-            plugin.setId(UUID.randomUUID().toString());
-            plugin.setPluginKey(manifest.getPluginKey());
-            plugin.setVersion(manifest.getVersion());
-            plugin.setName(manifest.getName());
-            plugin.setDescription(manifest.getDescription());
-            plugin.setVendor(manifest.getVendor());
-            plugin.setJarFileName(file.getOriginalFilename());
-            plugin.setJarFilePath(finalPath.toString());
-            plugin.setJarFileSize(file.getSize());
-            plugin.setJarChecksum(calculateChecksum(finalPath));
-            plugin.setDependencies(manifest.getDependencies());
-            plugin.setConfigSchema(manifest.getConfigSchema());
-            plugin.setDefaultConfig(manifest.getDefaultConfig());
-            plugin.setState(PluginState.INSTALLED);
-            plugin.setPermissions(manifest.getPermissions());
-
-            pluginRepository.save(plugin);
-
-            logger.info("Plugin installed: {} v{}", manifest.getPluginKey(), manifest.getVersion());
-
-            return plugin;
-
-        } catch (IOException e) {
-            throw new PluginInstallException("Failed to install plugin", e);
+    @GetMapping("/{pluginId}")
+    public PluginInfo getPlugin(@PathVariable String pluginId) {
+        PluginWrapper plugin = pluginManager.getPlugin(pluginId);
+        if (plugin == null) {
+            throw new RuntimeException("Plugin not found: " + pluginId);
         }
+        return toPluginInfo(plugin);
     }
 
-    @Override
-    @Transactional
-    public void start(String pluginId) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
+    @PostMapping
+    public ResponseEntity<PluginInfo> uploadPlugin(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "autoStart", defaultValue = "true") boolean autoStart) throws IOException {
 
-        if (plugin.getState() == PluginState.ACTIVE) {
-            logger.warn("Plugin {} is already active", pluginId);
-            return;
+        if (!Files.exists(pluginPath)) {
+            Files.createDirectories(pluginPath);
         }
 
-        if (plugin.getState() == PluginState.STARTING) {
-            throw new PluginOperationException("Plugin is already starting: " + pluginId);
+        String fileName = UUID.randomUUID() + ".jar";
+        Path targetPath = pluginPath.resolve(fileName);
+        file.transferTo(targetPath);
+
+        String pluginId = pluginManager.loadPlugin(targetPath);
+
+        if (autoStart) {
+            pluginManager.startPlugin(pluginId);
         }
 
-        try {
-            plugin.setState(PluginState.STARTING);
-            pluginRepository.save(plugin);
+        return ResponseEntity.ok(toPluginInfo(pluginManager.getPlugin(pluginId)));
+    }
 
-            // 1. 创建类加载器
-            PluginClassLoader classLoader = createClassLoader(plugin);
-            loaderCache.put(pluginId, classLoader);
-
-            // 2. 解析依赖
-            resolveDependencies(plugin);
-
-            // 3. 创建插件上下文
-            PluginContext context = new PluginContext(plugin, classLoader);
-            pluginCache.put(pluginId, context);
-
-            // 4. 扫描并注册 Action
-            List<ActionDefinition> actions = pluginScanner.scan(plugin, classLoader);
-            for (ActionDefinition action : actions) {
-                actionRegistry.registerAction(action);
-                savePluginAction(pluginId, action);
-            }
-
-            // 5. 初始化插件
-            initializePlugin(context);
-
-            // 6. 更新状态
-            plugin.setState(PluginState.ACTIVE);
-            plugin.setLoadedAt(LocalDateTime.now());
-            plugin.setActivatedAt(LocalDateTime.now());
-            plugin.setLastError(null);
-            pluginRepository.save(plugin);
-
-            eventPublisher.publishEvent(new PluginStartedEvent(this, plugin));
-
-            logger.info("Plugin started: {} v{} with {} actions",
-                plugin.getPluginKey(), plugin.getVersion(), actions.size());
-
-        } catch (Exception e) {
-            plugin.setState(PluginState.FAILED);
-            plugin.setLastError(e.getMessage());
-            pluginRepository.save(plugin);
-
-            cleanupPlugin(pluginId);
-
-            throw new PluginStartException("Failed to start plugin: " + pluginId, e);
+    @PostMapping("/{pluginId}/start")
+    public ResponseEntity<Void> startPlugin(@PathVariable String pluginId) {
+        PluginState state = pluginManager.startPlugin(pluginId);
+        if (state != PluginState.STARTED) {
+            throw new RuntimeException("Failed to start plugin: " + pluginId);
         }
+        return ResponseEntity.ok().build();
     }
 
-    @Override
-    @Transactional
-    public void stop(String pluginId) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
-
-        if (plugin.getState() != PluginState.ACTIVE) {
-            logger.warn("Plugin {} is not active, current state: {}", pluginId, plugin.getState());
-            return;
+    @PostMapping("/{pluginId}/stop")
+    public ResponseEntity<Void> stopPlugin(@PathVariable String pluginId) {
+        PluginState state = pluginManager.stopPlugin(pluginId);
+        if (state != PluginState.STOPPED) {
+            throw new RuntimeException("Failed to stop plugin: " + pluginId);
         }
+        return ResponseEntity.ok().build();
+    }
 
-        try {
-            plugin.setState(PluginState.STOPPING);
-            pluginRepository.save(plugin);
-
-            // 1. 注销 Action
-            List<PluginAction> pluginActions = pluginRepository.findActionsByPluginId(pluginId);
-            for (PluginAction pa : pluginActions) {
-                actionRegistry.unregisterAction(pa.getActionKey());
-            }
-
-            // 2. 调用插件销毁方法
-            PluginContext context = pluginCache.get(pluginId);
-            if (context != null) {
-                destroyPlugin(context);
-            }
-
-            // 3. 清理资源
-            cleanupPlugin(pluginId);
-
-            // 4. 更新状态
-            plugin.setState(PluginState.STOPPED);
-            pluginRepository.save(plugin);
-
-            eventPublisher.publishEvent(new PluginStoppedEvent(this, plugin));
-
-            logger.info("Plugin stopped: {} v{}", plugin.getPluginKey(), plugin.getVersion());
-
-        } catch (Exception e) {
-            plugin.setState(PluginState.FAILED);
-            plugin.setLastError(e.getMessage());
-            pluginRepository.save(plugin);
-
-            throw new PluginStopException("Failed to stop plugin: " + pluginId, e);
+    @DeleteMapping("/{pluginId}")
+    public ResponseEntity<Void> unloadPlugin(@PathVariable String pluginId) {
+        pluginManager.stopPlugin(pluginId);
+        boolean unloaded = pluginManager.unloadPlugin(pluginId);
+        if (!unloaded) {
+            throw new RuntimeException("Failed to unload plugin: " + pluginId);
         }
+        return ResponseEntity.noContent().build();
     }
 
-    @Override
-    @Transactional
-    public void uninstall(String pluginId) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
-
-        if (plugin.getState() == PluginState.ACTIVE) {
-            stop(pluginId);
+    @PostMapping("/{pluginId}/restart")
+    public ResponseEntity<Void> restartPlugin(@PathVariable String pluginId) {
+        pluginManager.stopPlugin(pluginId);
+        PluginState state = pluginManager.startPlugin(pluginId);
+        if (state != PluginState.STARTED) {
+            throw new RuntimeException("Failed to restart plugin: " + pluginId);
         }
-
-        pluginRepository.deleteById(pluginId);
-        pluginRepository.deleteActionsByPluginId(pluginId);
-
-        try {
-            Files.deleteIfExists(Path.of(plugin.getJarFilePath()));
-        } catch (IOException e) {
-            logger.warn("Failed to delete plugin file: {}", plugin.getJarFilePath(), e);
-        }
-
-        eventPublisher.publishEvent(new PluginUninstalledEvent(this, plugin));
-
-        logger.info("Plugin uninstalled: {} v{}", plugin.getPluginKey(), plugin.getVersion());
+        return ResponseEntity.ok().build();
     }
 
-    @Override
-    public Page<PluginDefinition> list(String state, String keyword) {
-        // 简化实现，实际应该使用 Specification 动态查询
-        return pluginRepository.findAll(Pageable.unpaged());
+    private PluginInfo toPluginInfo(PluginWrapper plugin) {
+        return new PluginInfo(
+            plugin.getPluginId(),
+            plugin.getDescriptor().getPluginId(),
+            plugin.getDescriptor().getVersion(),
+            plugin.getPluginState().toString(),
+            plugin.getDescriptor().getProvider()
+        );
     }
 
-    @Override
-    public PluginDetail getDetail(String pluginId) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
-
-        List<PluginAction> actions = pluginRepository.findActionsByPluginId(pluginId);
-        PluginContext context = pluginCache.get(pluginId);
-
-        PluginDetail detail = new PluginDetail();
-        detail.setDefinition(plugin);
-        detail.setActions(actions);
-        detail.setLoadedClasses(context != null ? context.getLoadedClassCount() : 0);
-        detail.setMemoryUsage(context != null ? context.getMemoryUsage() : 0);
-
-        return detail;
-    }
-
-    @Override
-    public void updateConfig(String pluginId, Map<String, Object> config) {
-        PluginDefinition plugin = pluginRepository.findById(pluginId)
-            .orElseThrow(() -> new PluginNotFoundException(pluginId));
-
-        PluginContext context = pluginCache.get(pluginId);
-        if (context != null) {
-            context.updateConfig(config);
-        }
-
-        logger.info("Plugin config updated: {}", pluginId);
-    }
-
-    @Override
-    public List<PluginLog> getLogs(String pluginId, int limit) {
-        // 从日志系统获取
-        return Collections.emptyList();
-    }
-
-    @Override
-    public List<PluginDefinition> getByState(PluginState state) {
-        return pluginRepository.findByState(state);
-    }
-
-    // ==================== 私有方法 ====================
-
-    private Path saveTempFile(MultipartFile file) throws IOException {
-        Path tempDir = Path.of(pluginStoragePath, "temp");
-        Files.createDirectories(tempDir);
-
-        String tempName = UUID.randomUUID() + ".jar";
-        Path tempPath = tempDir.resolve(tempName);
-        file.transferTo(tempPath);
-
-        return tempPath;
-    }
-
-    private Path moveToFinal(Path tempPath, PluginManifest manifest) throws IOException {
-        Path finalDir = Path.of(pluginStoragePath, manifest.getPluginKey());
-        Files.createDirectories(finalDir);
-
-        String fileName = String.format("%s-%s.jar", manifest.getPluginKey(), manifest.getVersion());
-        Path finalPath = finalDir.resolve(fileName);
-
-        Files.move(tempPath, finalPath);
-        return finalPath;
-    }
-
-    private PluginManifest parseManifest(Path jarPath) throws IOException {
-        try (JarFile jarFile = new JarFile(jarPath.toFile())) {
-            JarEntry manifestEntry = jarFile.getJarEntry("plugin-manifest.json");
-            if (manifestEntry == null) {
-                throw new InvalidPluginException("Missing plugin-manifest.json");
-            }
-
-            try (InputStream is = jarFile.getInputStream(manifestEntry)) {
-                return new ObjectMapper().readValue(is, PluginManifest.class);
-            }
-        }
-    }
-
-    private void validateJar(Path jarPath, PluginManifest manifest) {
-        // 校验文件大小
-        try {
-            long size = Files.size(jarPath);
-            if (size > 100 * 1024 * 1024) { // 100MB
-                throw new InvalidPluginException("Plugin file too large: " + size);
-            }
-        } catch (IOException e) {
-            throw new InvalidPluginException("Failed to validate plugin", e);
-        }
-
-        // TODO: 数字签名验证、恶意代码扫描
-    }
-
-    private String calculateChecksum(Path path) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(Files.readAllBytes(path));
-            return Base64.getEncoder().encodeToString(hash);
-        } catch (Exception e) {
-            logger.warn("Failed to calculate checksum", e);
-            return "";
-        }
-    }
-
-    private PluginClassLoader createClassLoader(PluginDefinition plugin) throws IOException {
-        Path jarPath = Path.of(plugin.getJarFilePath());
-        Set<String> restricted = new HashSet<>(defaultRestrictedPackages);
-
-        if (plugin.getPermissions() != null && plugin.getPermissions().getRestrictedPackages() != null) {
-            restricted.addAll(plugin.getPermissions().getRestrictedPackages());
-        }
-
-        return new PluginClassLoader(plugin.getId(), jarPath, sharedPackages, restricted);
-    }
-
-    private void cleanupPlugin(String pluginId) {
-        PluginClassLoader loader = loaderCache.remove(pluginId);
-        if (loader != null) {
-            try {
-                loader.close();
-            } catch (IOException e) {
-                logger.warn("Failed to close classloader for plugin: {}", pluginId, e);
-            }
-        }
-
-        pluginCache.remove(pluginId);
-    }
-
-    private void resolveDependencies(PluginDefinition plugin) {
-        List<PluginDependency> dependencies = plugin.getDependencies();
-        if (dependencies == null || dependencies.isEmpty()) {
-            return;
-        }
-
-        for (PluginDependency dep : dependencies) {
-            Optional<PluginDefinition> resolved = pluginRepository
-                .findActiveByPluginKey(dep.getPluginKey());
-
-            if (resolved.isEmpty()) {
-                throw new PluginDependencyException(
-                    "Dependency not satisfied: " + dep.getPluginKey());
-            }
-        }
-    }
-
-    private void initializePlugin(PluginContext context) {
-        try {
-            Class<?> activatorClass = context.loadClass("com.lowcode.plugin.PluginActivator");
-            Object activator = activatorClass.getDeclaredConstructor().newInstance();
-
-            if (activator instanceof PluginActivator) {
-                ((PluginActivator) activator).start(context);
-            }
-        } catch (ClassNotFoundException e) {
-            logger.debug("No PluginActivator found for plugin: {}", context.getPluginId());
-        } catch (Exception e) {
-            throw new PluginStartException("Failed to initialize plugin", e);
-        }
-    }
-
-    private void destroyPlugin(PluginContext context) {
-        try {
-            Class<?> activatorClass = context.loadClass("com.lowcode.plugin.PluginActivator");
-            Object activator = activatorClass.getDeclaredConstructor().newInstance();
-
-            if (activator instanceof PluginActivator) {
-                ((PluginActivator) activator).stop(context);
-            }
-        } catch (Exception e) {
-            logger.warn("Error during plugin destroy: {}", context.getPluginId(), e);
-        }
-    }
-
-    private void savePluginAction(String pluginId, ActionDefinition action) {
-        PluginAction pa = new PluginAction();
-        pa.setId(UUID.randomUUID().toString());
-        pa.setPluginId(pluginId);
-        pa.setActionKey(action.getQualifiedName());
-        pa.setActionName(action.getName());
-        pa.setResourceName(action.getResourceName());
-        pa.setEnabled(true);
-        pluginRepository.saveAction(pa);
-    }
+    public record PluginInfo(String id, String name, String version, String state, String provider) {}
 }
 
-// ==================== 4. 插件上下文 ====================
+// ==================== 5. 示例插件实现 ====================
 
-package com.lowcode.plugin.core;
+package com.example.plugin;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import com.example.action.ActionDefinition;
+import com.example.action.ActionPlugin;
+import org.pf4j.Extension;
+import org.springframework.stereotype.Component;
+
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 /**
- * 插件运行时上下文
+ * 文件存储插件
  */
-public class PluginContext {
+@Extension
+@Component
+public class FileStoragePlugin implements ActionPlugin {
 
-    private final PluginDefinition plugin;
-    private final PluginClassLoader classLoader;
-    private final Map<String, Object> config;
-    private final List<String> logs;
-    private final long startTime;
-
-    public PluginContext(PluginDefinition plugin, PluginClassLoader classLoader) {
-        this.plugin = plugin;
-        this.classLoader = classLoader;
-        this.config = new ConcurrentHashMap<>();
-        if (plugin.getDefaultConfig() != null) {
-            this.config.putAll(plugin.getDefaultConfig());
-        }
-        this.logs = new CopyOnWriteArrayList<>();
-        this.startTime = System.currentTimeMillis();
+    @Override
+    public String getNamespace() {
+        return "storage.file";
     }
 
-    public String getPluginId() {
-        return plugin.getId();
-    }
-
-    public String getPluginKey() {
-        return plugin.getPluginKey();
-    }
-
+    @Override
     public String getVersion() {
-        return plugin.getVersion();
+        return "1.0.0";
     }
 
-    public Map<String, Object> getConfig() {
-        return config;
+    @Override
+    public List<ActionDefinition> getActions() {
+        return Arrays.asList(
+            new ActionDefinition("upload", "上传文件"),
+            new ActionDefinition("download", "下载文件"),
+            new ActionDefinition("delete", "删除文件"),
+            new ActionDefinition("preview", "预览文件")
+        );
     }
 
-    public void updateConfig(Map<String, Object> newConfig) {
-        config.putAll(newConfig);
+    @Override
+    public Object execute(String actionName, Map<String, Object> params) {
+        return switch (actionName) {
+            case "upload" -> upload(params);
+            case "download" -> download(params);
+            case "delete" -> delete(params);
+            case "preview" -> preview(params);
+            default -> throw new RuntimeException("Unknown action: " + actionName);
+        };
     }
 
-    public Class<?> loadClass(String name) throws ClassNotFoundException {
-        return classLoader.loadClass(name);
+    private Object upload(Map<String, Object> params) {
+        String fileName = (String) params.get("fileName");
+        String contentType = (String) params.get("contentType");
+        Long size = Long.valueOf(params.get("size").toString());
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("fileId", UUID.randomUUID().toString());
+        result.put("fileName", fileName);
+        result.put("contentType", contentType);
+        result.put("size", size);
+        result.put("url", "/api/files/" + fileName);
+        result.put("createdAt", System.currentTimeMillis());
+
+        return result;
     }
 
-    public void log(String message) {
-        String logEntry = String.format("[%s] %s", java.time.LocalDateTime.now(), message);
-        logs.add(logEntry);
+    private Object download(Map<String, Object> params) {
+        String fileId = (String) params.get("fileId");
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("fileId", fileId);
+        result.put("content", "file content bytes...");
+        result.put("contentType", "application/octet-stream");
+
+        return result;
     }
 
-    public List<String> getLogs() {
-        return new CopyOnWriteArrayList<>(logs);
+    private Object delete(Map<String, Object> params) {
+        String fileId = (String) params.get("fileId");
+
+        return Map.of(
+            "fileId", fileId,
+            "deleted", true,
+            "deletedAt", System.currentTimeMillis()
+        );
     }
 
-    public int getLoadedClassCount() {
-        return classLoader.getLoadedClassCount();
-    }
+    private Object preview(Map<String, Object> params) {
+        String fileId = (String) params.get("fileId");
 
-    public long getMemoryUsage() {
-        Runtime runtime = Runtime.getRuntime();
-        return runtime.totalMemory() - runtime.freeMemory();
-    }
-
-    public long getUptime() {
-        return System.currentTimeMillis() - startTime;
+        return Map.of(
+            "fileId", fileId,
+            "previewUrl", "/api/files/" + fileId + "/preview",
+            "expireAt", System.currentTimeMillis() + 3600000
+        );
     }
 }
 
-// ==================== 5. 实体类定义 ====================
+// ==================== 6. 实体类定义 ====================
 
-package com.lowcode.plugin.core;
+package com.example.server.entity;
 
 import lombok.Data;
 import javax.persistence.*;
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
 
 @Data
 @Entity
-@Table(name = "plugin_definition")
-public class PluginDefinition {
+@Table(name = "plugin_metadata")
+public class PluginMetadata {
 
     @Id
-    private String id;
-
-    @Column(name = "plugin_key", nullable = false)
-    private String pluginKey;
+    private String pluginId;
 
     @Column(nullable = false)
-    private String version;
+    private String namespace;
 
     @Column(nullable = false)
     private String name;
@@ -790,56 +484,26 @@ public class PluginDefinition {
 
     private String vendor;
 
-    @Column(name = "jar_file_name")
-    private String jarFileName;
-
-    @Column(name = "jar_file_path")
-    private String jarFilePath;
-
-    @Column(name = "jar_file_size")
-    private Long jarFileSize;
-
-    @Column(name = "jar_checksum")
-    private String jarChecksum;
+    @Convert(converter = JsonConverter.class)
+    private Object configSchema;
 
     @Convert(converter = JsonConverter.class)
-    private List<PluginDependency> dependencies;
+    private Object runtimeConfig;
 
-    @Column(name = "config_schema")
-    @Convert(converter = JsonConverter.class)
-    private Map<String, Object> configSchema;
+    private Integer loadCount = 0;
 
-    @Column(name = "default_config")
-    @Convert(converter = JsonConverter.class)
-    private Map<String, Object> defaultConfig;
+    private LocalDateTime lastLoadedAt;
 
-    @Enumerated(EnumType.STRING)
-    private PluginState state;
-
-    @Convert(converter = JsonConverter.class)
-    private PluginPermissions permissions;
-
-    @Column(name = "loaded_at")
-    private LocalDateTime loadedAt;
-
-    @Column(name = "activated_at")
-    private LocalDateTime activatedAt;
-
-    @Column(name = "last_error")
-    private String lastError;
-
-    @Column(name = "created_at")
     private LocalDateTime createdAt;
 
-    @Column(name = "updated_at")
     private LocalDateTime updatedAt;
-
-    @Transient
-    public List<String> getScanPackages() {
-        // 从 manifest 或配置中读取
-        return List.of("com.lowcode.plugin.action");
-    }
 }
+
+package com.example.server.entity;
+
+import lombok.Data;
+import javax.persistence.*;
+import java.time.LocalDateTime;
 
 @Data
 @Entity
@@ -852,87 +516,108 @@ public class PluginAction {
     @Column(name = "plugin_id")
     private String pluginId;
 
-    @Column(name = "action_key")
-    private String actionKey;
+    @Column(nullable = false)
+    private String namespace;
 
-    @Column(name = "action_name")
+    @Column(name = "action_name", nullable = false)
     private String actionName;
 
-    @Column(name = "resource_name")
-    private String resourceName;
+    @Column(name = "action_title")
+    private String actionTitle;
+
+    private String description;
 
     @Convert(converter = JsonConverter.class)
-    private Map<String, Object> metadata;
+    private Object inputSchema;
 
-    private Boolean enabled;
+    @Convert(converter = JsonConverter.class)
+    private Object outputSchema;
+
+    private Boolean enabled = true;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 }
 
-@Data
-public class PluginManifest {
-    private String pluginKey;
-    private String version;
-    private String name;
-    private String description;
-    private String vendor;
-    private String minPlatformVersion;
-    private List<String> scanPackages;
-    private List<PluginDependency> dependencies;
-    private Map<String, Object> configSchema;
-    private Map<String, Object> defaultConfig;
-    private PluginPermissions permissions;
+// ==================== 7. Repository 接口 ====================
+
+package com.example.server.repository;
+
+import com.example.server.entity.PluginMetadata;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.Optional;
+
+@Repository
+public interface PluginMetadataRepository extends JpaRepository<PluginMetadata, String> {
+
+    Optional<PluginMetadata> findByNamespace(String namespace);
+
+    Optional<PluginMetadata> findByPluginId(String pluginId);
 }
 
-@Data
-public class PluginDependency {
-    private String pluginKey;
-    private String versionRange;
+package com.example.server.repository;
+
+import com.example.server.entity.PluginAction;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+@Repository
+public interface PluginActionRepository extends JpaRepository<PluginAction, String> {
+
+    List<PluginAction> findByPluginId(String pluginId);
+
+    List<PluginAction> findByNamespace(String namespace);
+
+    List<PluginAction> findByEnabledTrue();
 }
 
-@Data
-public class PluginPermissions {
-    private boolean fileReadAllowed = true;
-    private boolean fileWriteAllowed = false;
-    private List<String> allowedPaths = List.of();
-    private boolean networkAccessAllowed = false;
-    private List<String> allowedHosts = List.of();
-    private boolean reflectionAllowed = false;
-    private boolean systemExitAllowed = false;
-    private boolean execCommandAllowed = false;
-    private List<String> restrictedPackages = List.of();
+// ==================== 8. 工具类 ====================
+
+package com.example.server.util;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import javax.persistence.AttributeConverter;
+import javax.persistence.Converter;
+
+@Converter(autoApply = true)
+public class JsonConverter implements AttributeConverter<Object, String> {
+
+    private static final ObjectMapper mapper = new ObjectMapper();
+
+    @Override
+    public String convertToDatabaseColumn(Object attribute) {
+        if (attribute == null) {
+            return null;
+        }
+        try {
+            return mapper.writeValueAsString(attribute);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to convert to JSON", e);
+        }
+    }
+
+    @Override
+    public Object convertToEntityAttribute(String dbData) {
+        if (dbData == null) {
+            return null;
+        }
+        try {
+            return mapper.readValue(dbData, Object.class);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to parse JSON", e);
+        }
+    }
 }
 
-@Data
-public class PluginDetail {
-    private PluginDefinition definition;
-    private List<PluginAction> actions;
-    private int loadedClasses;
-    private long memoryUsage;
-}
+// ==================== 9. 异常处理 ====================
 
-@Data
-public class PluginLog {
-    private LocalDateTime timestamp;
-    private String level;
-    private String message;
-}
-
-public enum PluginState {
-    INSTALLED,
-    RESOLVED,
-    STARTING,
-    ACTIVE,
-    STOPPING,
-    STOPPED,
-    UNINSTALLED,
-    FAILED
-}
-
-// ==================== 6. 异常类 ====================
-
-package com.lowcode.plugin.core;
+package com.example.server.exception;
 
 public class PluginException extends RuntimeException {
     public PluginException(String message) {
@@ -944,130 +629,34 @@ public class PluginException extends RuntimeException {
     }
 }
 
-public class PluginNotFoundException extends PluginException {
-    public PluginNotFoundException(String pluginId) {
-        super("Plugin not found: " + pluginId);
-    }
-}
+package com.example.server.exception;
 
-public class PluginAlreadyExistsException extends PluginException {
-    public PluginAlreadyExistsException(String pluginKey, String version) {
-        super("Plugin already exists: " + pluginKey + " v" + version);
-    }
-}
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-public class PluginInstallException extends PluginException {
-    public PluginInstallException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
+import java.time.LocalDateTime;
+import java.util.Map;
 
-public class PluginStartException extends PluginException {
-    public PluginStartException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
+@RestControllerAdvice
+public class GlobalExceptionHandler {
 
-public class PluginStopException extends PluginException {
-    public PluginStopException(String message, Throwable cause) {
-        super(message, cause);
-    }
-}
-
-public class PluginOperationException extends PluginException {
-    public PluginOperationException(String message) {
-        super(message);
-    }
-}
-
-public class PluginDependencyException extends PluginException {
-    public PluginDependencyException(String message) {
-        super(message);
-    }
-}
-
-public class InvalidPluginException extends PluginException {
-    public InvalidPluginException(String message) {
-        super(message);
+    @ExceptionHandler(RuntimeException.class)
+    public ResponseEntity<Map<String, Object>> handleRuntimeException(RuntimeException e) {
+        return ResponseEntity.badRequest().body(Map.of(
+            "error", true,
+            "message", e.getMessage(),
+            "timestamp", LocalDateTime.now()
+        ));
     }
 
-    public InvalidPluginException(String message, Throwable cause) {
-        super(message, cause);
+    @ExceptionHandler(PluginException.class)
+    public ResponseEntity<Map<String, Object>> handlePluginException(PluginException e) {
+        return ResponseEntity.badRequest().body(Map.of(
+            "error", true,
+            "type", "PLUGIN_ERROR",
+            "message", e.getMessage(),
+            "timestamp", LocalDateTime.now()
+        ));
     }
 }
-
-// ==================== 7. 事件类 ====================
-
-package com.lowcode.plugin.core;
-
-import org.springframework.context.ApplicationEvent;
-
-public class PluginEvent extends ApplicationEvent {
-    private final PluginDefinition plugin;
-
-    public PluginEvent(Object source, PluginDefinition plugin) {
-        super(source);
-        this.plugin = plugin;
-    }
-
-    public PluginDefinition getPlugin() {
-        return plugin;
-    }
-}
-
-public class PluginStartedEvent extends PluginEvent {
-    public PluginStartedEvent(Object source, PluginDefinition plugin) {
-        super(source, plugin);
-    }
-}
-
-public class PluginStoppedEvent extends PluginEvent {
-    public PluginStoppedEvent(Object source, PluginDefinition plugin) {
-        super(source, plugin);
-    }
-}
-
-public class PluginUninstalledEvent extends PluginEvent {
-    public PluginUninstalledEvent(Object source, PluginDefinition plugin) {
-        super(source, plugin);
-    }
-}
-
-// ==================== 8. Repository 接口 ====================
-
-package com.lowcode.plugin.core;
-
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
-
-import java.util.List;
-import java.util.Optional;
-
-@Repository
-public interface PluginRepository extends JpaRepository<PluginDefinition, String> {
-
-    Optional<PluginDefinition> findByPluginKeyAndVersion(String pluginKey, String version);
-
-    Optional<PluginDefinition> findActiveByPluginKey(String pluginKey);
-
-    List<PluginDefinition> findByState(PluginState state);
-
-    List<PluginAction> findActionsByPluginId(String pluginId);
-
-    void deleteActionsByPluginId(String pluginId);
-
-    void saveAction(PluginAction action);
-}
-
-// ==================== 9. 扫描器接口与实现 ====================
-
-package com.lowcode.plugin.core;
-
-import com.lowcode.action.core.ActionDefinition;
-import java.util.List;
-
-public interface PluginScanner {
-    List<ActionDefinition> scan(PluginDefinition plugin, PluginClassLoader classLoader);
-}
-
-// 实现参考之前的 DefaultPluginScanner

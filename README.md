@@ -41,15 +41,15 @@
 
 ### 技术栈
 
-- **后端**：Java 17+, Spring Boot 3.x, PostgreSQL, Redis
+- **后端**：Java 17+, Spring Boot 3.x, PF4J, PostgreSQL, Redis
 - **前端**：React 18+, TypeScript
 - **协议**：HTTP/REST, JSON Schema
 
 ### 扩展能力
 
-- **热注册**：运行时动态加载/卸载 Jar 包插件
-- **类隔离**：插件级 ClassLoader 避免依赖冲突
-- **安全沙箱**：权限控制、资源限制、包访问控制
+- **热注册**：基于 [PF4J](https://github.com/pf4j/pf4j) + [pf4j-spring](https://github.com/clyoudu/pf4j-spring) 实现 Jar 包热加载
+- **类隔离**：PF4J 插件级 ClassLoader 避免依赖冲突
+- **Spring 集成**：插件内支持 Spring 注解和依赖注入
 
 ## 文档导航
 

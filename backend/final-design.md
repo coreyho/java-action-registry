@@ -81,6 +81,7 @@
 | **Binding** | 前后端绑定关系 | 组件属性 ↔ Action 参数 |
 | **Namespace** | 命名空间（领域.上下文） | crm.customer、order.fulfillment |
 | **Catalog** | 组件/Action 目录 | 可发现、可搜索的能力清单 |
+| **Plugin** | 热加载的 Jar 包插件 | file-storage-plugin.jar |
 
 ---
 
@@ -828,7 +829,101 @@ Authorization: Bearer {jwt}
 
 ---
 
-## 9. 技术选型
+## 9. 插件化架构
+
+### 9.1 概述
+
+基于 [PF4J](https://github.com/pf4j/pf4j) 实现 Java Jar 包热注册机制，支持运行时动态加载、卸载和更新 Action 插件。
+
+### 9.2 架构图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Action Registry Service                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    Spring Plugin Manager (PF4J)                     │   │
+│  │                                                                     │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐    │   │
+│  │  │   Load     │  │   Start    │  │   Stop     │  │  Unload    │    │   │
+│  │  │  Plugins   │  │  Plugins   │  │  Plugins   │  │  Plugins   │    │   │
+│  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘    │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │              Spring ApplicationContext (插件上下文)                   │   │
+│  │                                                                     │   │
+│  │   ┌─────────────────┐        ┌─────────────────┐                   │   │
+│  │   │ Plugin-1 Context│        │ Plugin-2 Context│                   │   │
+│  │   │  ┌───────────┐  │        │  ┌───────────┐  │                   │   │
+│  │   │  │ @Service  │  │        │  │ @Service  │  │                   │   │
+│  │   │  │ @Component│  │        │  │ @Component│  │                   │   │
+│  │   │  │ @Autowired│  │        │  │ @Autowired│  │                   │   │
+│  │   │  └───────────┘  │        │  └───────────┘  │                   │   │
+│  │   └─────────────────┘        └─────────────────┘                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.3 核心概念
+
+| 概念 | 说明 | PF4J 对应 |
+|------|------|-----------|
+| **Plugin** | 热加载的 Jar 包 | `Plugin` 接口 |
+| **Extension** | 插件暴露的扩展点 | `@Extension` 注解 |
+| **ExtensionPoint** | 扩展点接口 | `ExtensionPoint` 接口 |
+| **PluginState** | 插件生命周期状态 | `PluginState` 枚举 |
+
+### 9.4 生命周期
+
+```
+CREATED → RESOLVED → STARTED → STOPPED → UNLOADED
+```
+
+### 9.5 开发示例
+
+**插件接口定义：**
+```java
+public interface ActionPlugin extends ExtensionPoint {
+    String getNamespace();
+    List<ActionDefinition> getActions();
+    Object execute(String actionName, Map<String, Object> params);
+}
+```
+
+**插件实现：**
+```java
+@Extension
+@Component
+public class FileStoragePlugin implements ActionPlugin {
+    @Override
+    public String getNamespace() { return "storage.file"; }
+
+    @Override
+    public List<ActionDefinition> getActions() {
+        return Arrays.asList(
+            new ActionDefinition("upload", "上传文件"),
+            new ActionDefinition("download", "下载文件")
+        );
+    }
+}
+```
+
+### 9.6 API 设计
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/plugins` | 获取所有插件 |
+| POST | `/api/plugins` | 上传插件 |
+| POST | `/api/plugins/{id}/start` | 启动插件 |
+| POST | `/api/plugins/{id}/stop` | 停止插件 |
+| DELETE | `/api/plugins/{id}` | 卸载插件 |
+
+---
+
+## 10. 技术选型
 
 | 组件 | 选型 | 说明 |
 |------|------|------|
@@ -839,6 +934,8 @@ Authorization: Bearer {jwt}
 | 配置中心 | Nacos / Apollo | 动态配置 |
 | 监控 | Prometheus + Grafana | 云原生标准 |
 | 链路追踪 | OpenTelemetry | 标准化追踪 |
+| **插件框架** | **PF4J 3.12+** | **Java 插件化框架** |
+| **Spring 集成** | **pf4j-spring** | **PF4J Spring 集成** |
 
 ---
 
@@ -867,6 +964,7 @@ Authorization: Bearer {jwt}
 
 ### 阶段 4：高级特性（持续）
 
+- [ ] **插件化架构（PF4J）**：Jar 包热加载、类隔离、Spring 集成
 - [ ] 异步 Action（MQ）
 - [ ] 流式响应
 - [ ] 多租户
